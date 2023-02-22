@@ -1000,6 +1000,7 @@ class UserBase:
         required=False,
         description="List of role_ids, required for interactive users",
     )
+    programs = graphene.List(graphene.Int)
 
     # Enrolment Officer / Feedback / Claim Admin specific
     birth_date = graphene.Date(required=False)

@@ -13,6 +13,8 @@ from core.apps import CoreConfig
 from core.models import User, InteractiveUser, Officer, UserRole
 from core.validation.obligatoryFieldValidation import validate_payload_for_obligatory_fields
 
+from program import models as program_models
+
 logger = logging.getLogger(__file__)
 
 
@@ -56,6 +58,10 @@ def create_or_update_interactive_user(user_id, data, audit_user_id, connected):
         create_or_update_user_districts(
             i_user, data["districts"], data_subset["audit_user_id"]
         )
+    if "programs" in data:
+        programs = program_models.Program.objects.filter(idProgram__in=data["programs"])
+        for program in programs:
+            program.user.add(i_user)
     return i_user, created
 
 
