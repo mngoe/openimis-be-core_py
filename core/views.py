@@ -1,3 +1,4 @@
+from program import models as program_models
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -16,4 +17,10 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=False)
     def current_user(self, request):
         serializer = self.get_serializer(request.user, many=False)
-        return Response(serializer.data)
+        response = serializer.data
+        user_id = request.user._u.id
+        programs = program_models.Program.objects.filter(user__id=user_id).filter(
+            nameProgram="VIH")
+        if programs:
+            response['i_user']['rights'].append(10119)
+        return Response(response)
