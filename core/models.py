@@ -17,6 +17,7 @@ from django.db.models import Q, DO_NOTHING, F, JSONField
 from django.utils.crypto import salted_hmac
 from graphql import ResolveInfo
 from simple_history.models import HistoricalRecords
+from django.core.cache import cache
 
 import core
 from .fields import DateTimeField
@@ -236,6 +237,7 @@ class TechnicalUser(AbstractBaseUser):
     is_superuser = models.BooleanField(default=False)
     validity_from = models.DateTimeField(blank=True, null=True)
     validity_to = models.DateTimeField(blank=True, null=True)
+    is_imis_admin = False
 
     @property
     def id_for_audit(self):
@@ -410,6 +412,20 @@ class InteractiveUser(VersionedModel):
         return Officer.objects.filter(
             code=self.username, has_login=True, validity_to__isnull=True).exists()
 
+    @property
+    def is_imis_admin(self):
+        is_admin = cache.get('is_admin_' + str(self.id))
+        if is_admin is None:
+            is_admin = Role.objects.filter(
+                is_system=64,
+                user_roles__user=self,
+                validity_to__isnull=True,
+                user_roles__validity_to__isnull=True,
+                user_roles__user__validity_to__isnull=True
+            ).exists()
+            cache.set('is_admin_' + str(self.id), is_admin, 600)
+        return is_admin
+
     def set_password(self, raw_password):
         from hashlib import sha256
         from secrets import token_hex
@@ -514,6 +530,15 @@ class User(UUIDModel, PermissionsMixin):
     @property
     def is_superuser(self):
         return self._u.is_superuser
+
+    @property
+    def is_imis_admin(self):
+        # 64 is system number for IMIS Administrator
+        user = self._u
+        if isinstance(user, InteractiveUser):
+            return user.is_imis_admin
+        else:
+            return False
 
     @property
     def is_active(self):
