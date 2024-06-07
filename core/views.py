@@ -1,6 +1,7 @@
 import csv
 
 from django.http import Http404, StreamingHttpResponse
+from django.views.decorators.http import require_GET
 from isodate import strftime
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view
@@ -10,7 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from .models import User, ExportableQueryModel
 from .scheduler import scheduler
 from .serializers import UserSerializer
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -27,6 +28,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
 
 @api_view(['GET'])
+@require_GET
 def fetch_export(request):
     requested_export = request.query_params.get('export')
     export = ExportableQueryModel.objects.filter(name=requested_export).first()
@@ -37,7 +39,7 @@ def fetch_export(request):
     elif export.is_deleted:
         return Response(data='Export csv file was removed from server.', status=status.HTTP_410_GONE)
 
-    export_file_name = F"export_{export.model}_{strftime(export.create_date, '%d/%m/%Y')}.csv"
+    export_file_name = F"export_{export.model}_{strftime(export.create_date, '%d_%m_%Y')}.csv"
     return StreamingHttpResponse(
         (row for row in export.content.file.readlines()),
         content_type="text/csv",
@@ -51,5 +53,6 @@ def _serialize_job(job):
 
 
 @api_view(['GET'])
+@require_GET
 def get_scheduled_jobs(request):
     return Response([_serialize_job(job) for job in scheduler.get_jobs()])

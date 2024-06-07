@@ -13,7 +13,7 @@ this = sys.modules[MODULE_NAME]
 
 DEFAULT_CFG = {
     "username_code_length": "8",  # cannot be bigger than 50 unless modified length limit
-    "user_username_and_code_length_limit": "50",
+    "username_changeable": True,
     "auto_provisioning_user_group": "user",
     "calendar_package": "core",
     "calendar_module": ".calendars.ad_calendar",
@@ -23,7 +23,7 @@ DEFAULT_CFG = {
     "longstrfdate": "%a %d %B %Y",
     "iso_raw_date": "False",
     "age_of_majority": "18",
-    "async_mutations": "False",
+    "async_mutations": "True" if os.environ.get("ASYNC", os.environ.get("MODE", "PROD")) == "PROD" else "False",
     "password_reset_template": "password_reset.txt",
     "currency": "$",
     "gql_query_users_perms": ["121701"],
@@ -49,6 +49,9 @@ DEFAULT_CFG = {
     "gql_mutation_delete_claim_administrator_perms": ["121604"],
     "fields_controls_user": {},
     "fields_controls_eo": {},
+    "is_valid_health_facility_contract_required": False,
+    "secondary_calendar": None,
+    "locked_user_password_hash": 'locked'
 }
 
 
@@ -56,7 +59,7 @@ class CoreConfig(AppConfig):
     default_auto_field = 'django.db.models.AutoField'  # Django 3.1+
     name = MODULE_NAME
     username_code_length = 8
-    user_username_and_code_length_limit = 50
+    username_changeable = True
     age_of_majority = 18
     password_reset_template = "password_reset.txt"
     gql_query_roles_perms = []
@@ -80,9 +83,12 @@ class CoreConfig(AppConfig):
     gql_mutation_create_claim_administrator_perms = []
     gql_mutation_update_claim_administrator_perms = []
     gql_mutation_delete_claim_administrator_perms = []
+    is_valid_health_facility_contract_required = None
+    locked_user_password_hash = None
 
     fields_controls_user = {}
     fields_controls_eo = {}
+    secondary_calendar = None
 
     def _import_module(self, cfg, k):
         logger.info('import %s.%s' %
@@ -104,11 +110,11 @@ class CoreConfig(AppConfig):
             this.calendar = self._import_module(DEFAULT_CFG, "calendar")
             this.datetime = self._import_module(DEFAULT_CFG, "datetime")
 
-    def _configure_username_code_length(self, cfg):
+    def _configure_user_config(self, cfg):
         this.username_code_length = int(cfg["username_code_length"])
-
-    def _configure_user_username_and_code_length_limit(self, cfg):
-        this.user_username_and_code_length_limit = int(cfg["user_username_and_code_length_limit"])
+        # Quick fix, this config has to be rebuilt
+        CoreConfig.username_code_length = int(cfg["username_code_length"])
+        CoreConfig.username_changeable = cfg["username_changeable"]
 
     def _configure_majority(self, cfg):
         this.age_of_majority = int(cfg["age_of_majority"])
@@ -162,19 +168,24 @@ class CoreConfig(AppConfig):
         CoreConfig.fields_controls_user = cfg["fields_controls_user"]
         CoreConfig.fields_controls_eo = cfg["fields_controls_eo"]
 
+    def _configure_additional_settings(self, cfg):
+        CoreConfig.is_valid_health_facility_contract_required = cfg["is_valid_health_facility_contract_required"]
+        CoreConfig.secondary_calendar = cfg["secondary_calendar"]
+
     def ready(self):
         from .models import ModuleConfiguration
         cfg = ModuleConfiguration.get_or_default(MODULE_NAME, DEFAULT_CFG)
         self._configure_calendar(cfg)
-        self._configure_username_code_length(cfg)
-        self._configure_user_username_and_code_length_limit(cfg)
+        self._configure_user_config(cfg)
         self._configure_majority(cfg)
         self._configure_auto_provisioning(cfg)
         self._configure_graphql(cfg)
         self._configure_currency(cfg)
         self._configure_permissions(cfg)
+        self._configure_additional_settings(cfg)
 
-        self.password_reset_template = cfg["password_reset_template"]
+        CoreConfig.password_reset_template = cfg["password_reset_template"]
+        CoreConfig.locked_user_password_hash = cfg["locked_user_password_hash"]
 
         # The scheduler starts as soon as it gets a job, which could be before Django is ready, so we enable it here
         from core import scheduler
