@@ -19,6 +19,7 @@ setup(
     author='Xavier Gillmann',
     author_email='xgillmann@bluesquarehub.com',
     install_requires=[
+        'isodate',
         'django',
         'django-db-signals',
         'djangorestframework',
@@ -26,7 +27,8 @@ setup(
         'nepalicalendar',
         'django-simple-history',
         'django-dirtyfields',
-        'websocket-client'
+        'websocket-client',
+        'jsonschema',
     ],
     classifiers=[
         'Environment :: Web Environment',
