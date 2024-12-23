@@ -410,8 +410,10 @@ class OrderedDjangoFilterConnectionField(DjangoFilterConnectionField):
     def resolve_queryset(
             cls, connection, iterable, info, args, filtering_args, filterset_class
     ):
+        print("Enter in resolve_queryset method")
         if not info.context.user.is_authenticated:
             raise PermissionDenied(_("unauthorized"))
+        print("still inside resolve_queryset method")
         qs = super(DjangoFilterConnectionField, cls).resolve_queryset(
             connection, iterable, info, args
         )
