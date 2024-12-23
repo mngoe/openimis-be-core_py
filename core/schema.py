@@ -898,6 +898,7 @@ class Query(graphene.ObjectType):
         return ModulePermissionsListGQLType(list(config))
 
     def resolve_custom_filters(self, info, **kwargs):
+        print("enter resolve_custom_filters")
         user = info.context.user
         if type(user) is AnonymousUser or not user.id:
             raise PermissionError("Unauthorized")
