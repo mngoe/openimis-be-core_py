@@ -183,6 +183,7 @@ class OpenIMISMutation(graphene.relay.ClientIDMutation):
 
     @classmethod
     def coerce_mutation_data(cls, input_data, input_class = None):
+        print("input_data ", input_data)
         if input_class is None:
             input_class=cls.Input
         coerced_data = {}
