@@ -418,7 +418,10 @@ class OrderedDjangoFilterConnectionField(DjangoFilterConnectionField):
             connection, iterable, info, args
         )
         filter_kwargs = {k: v for k, v in args.items() if k in filtering_args}
+        print("filter_kwargs ", filter_kwargs)
         qs = filterset_class(data=filter_kwargs, queryset=qs, request=info.context).qs
+        print("qs ", qs)
+        print("result ", OrderedDjangoFilterConnectionField.orderBy(qs, args))
 
         return OrderedDjangoFilterConnectionField.orderBy(qs, args)
 
