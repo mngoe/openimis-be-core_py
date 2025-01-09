@@ -115,12 +115,9 @@ class InteractiveUserGQLType(DjangoObjectType):
         connection_class = ExtendedConnection
 
     def resolve_health_facility(self, info, **kwargs):
-        print("Enter resolve_health_facility")
         if not info.context.user.has_perms(CoreConfig.gql_query_users_perms):
-            print("not authorized")
             raise PermissionDenied(_("unauthorized"))
         if self.health_facility_id:
-            print("Filter now...")
             return HealthFacility.get_queryset(None, info).filter(pk=self.health_facility_id).first()
         else:
             return None
@@ -178,9 +175,7 @@ class UserGQLType(DjangoObjectType):
         return User.get_queryset(queryset, info)
 
     def resolve_client_mutation_id(self, info):
-        print("enter resolve_client_mutation_id")
         if not info.context.user.has_perms(CoreConfig.gql_query_users_perms):
-            print("Non autorise")
             raise PermissionDenied(_("unauthorized"))
         user_mutation = self.mutations.select_related('mutation').filter(mutation__status=0).first()
         return user_mutation.mutation.client_mutation_id if user_mutation else None

@@ -183,7 +183,6 @@ class OpenIMISMutation(graphene.relay.ClientIDMutation):
 
     @classmethod
     def coerce_mutation_data(cls, input_data, input_class = None):
-        print("input_data ", input_data)
         if input_class is None:
             input_class=cls.Input
         coerced_data = {}
@@ -410,18 +409,13 @@ class OrderedDjangoFilterConnectionField(DjangoFilterConnectionField):
     def resolve_queryset(
             cls, connection, iterable, info, args, filtering_args, filterset_class
     ):
-        print("Enter in resolve_queryset method")
         if not info.context.user.is_authenticated:
             raise PermissionDenied(_("unauthorized"))
-        print("still inside resolve_queryset method")
         qs = super(DjangoFilterConnectionField, cls).resolve_queryset(
             connection, iterable, info, args
         )
         filter_kwargs = {k: v for k, v in args.items() if k in filtering_args}
-        print("filter_kwargs ", filter_kwargs)
         qs = filterset_class(data=filter_kwargs, queryset=qs, request=info.context).qs
-        print("qs ", qs)
-        print("result ", OrderedDjangoFilterConnectionField.orderBy(qs, args))
 
         return OrderedDjangoFilterConnectionField.orderBy(qs, args)
 
@@ -898,7 +892,6 @@ class Query(graphene.ObjectType):
         return ModulePermissionsListGQLType(list(config))
 
     def resolve_custom_filters(self, info, **kwargs):
-        print("enter resolve_custom_filters")
         user = info.context.user
         if type(user) is AnonymousUser or not user.id:
             raise PermissionError("Unauthorized")
