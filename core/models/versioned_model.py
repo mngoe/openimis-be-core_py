@@ -54,8 +54,8 @@ class CachedManager(models.Manager):
         # If we constructed a cache key, try to retrieve from the cache.
         if cache_key:
             cached_instance = cache.get(cache_key)
+            print("cached_instance", cached_instance)
             if cached_instance is not None:
-                print("cached_instance", cached_instance)
                 print("Returning cached instance for key: %s", cache_key)
                 logger.debug("Returning cached instance for key: %s", cache_key)
                 return cached_instance
@@ -93,6 +93,7 @@ class BaseVersionedModel(models.Model):
         
         # Update the cache with the latest version.
         cache.set(cache_key, self, timeout=None)
+        print("Saved and cached instance: %s", cache_key)
         logger.debug("Saved and cached instance: %s", cache_key)
         return self
 
