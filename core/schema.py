@@ -49,7 +49,7 @@ from .models import ModuleConfiguration, FieldControl, MutationLog, Language, Ro
 from .services.roleServices import check_role_unique_name
 from .services.userServices import check_user_unique_email
 from .validation.obligatoryFieldValidation import validate_payload_for_obligatory_fields
-from location.models import HealthFacility
+from django.apps import apps
 
 MAX_SMALLINT = 32767
 MIN_SMALLINT = -32768
@@ -1431,16 +1431,20 @@ def update_or_create_user(data, user):
         data_copied = data
         if not location_id:
             if health_facility_id:
-                hf = HealthFacility.objects.filter(id=health_facility_id).first()
-                if hf:
-                    officer_location_id = hf.location
-                    if hf.location.parent:
-                        officer_location_id = hf.location.parent
-                        if hf.location.parent.parent:
-                            officer_location_id = hf.location.parent.parent
-                            if hf.location.parent.parent.parent:
-                                officer_location_id = hf.location.parent.parent.parent
-                    data_copied["location_id"] = officer_location_id.id
+                try:
+                    apps.get_model('location', 'HealthFacility')
+                    hf = HealthFacility.objects.filter(id=health_facility_id).first()
+                    if hf:
+                        officer_location_id = hf.location
+                        if hf.location.parent:
+                            officer_location_id = hf.location.parent
+                            if hf.location.parent.parent:
+                                officer_location_id = hf.location.parent.parent
+                                if hf.location.parent.parent.parent:
+                                    officer_location_id = hf.location.parent.parent.parent
+                        data_copied["location_id"] = officer_location_id.id
+                except Exception as e:
+                    print(e)
 
         officer, officer_created = create_or_update_officer(
             user_uuid, data_copied, user.id_for_audit, UT_INTERACTIVE in data["user_types"])
