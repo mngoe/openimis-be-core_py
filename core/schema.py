@@ -1444,7 +1444,7 @@ def update_or_create_user(data, user):
                                     officer_location_id = hf.location.parent.parent.parent
                         data_copied["location_id"] = officer_location_id.id
                 except Exception as e:
-                    print(e)
+                    logger.warning("Error %s ", str(e))
 
         officer, officer_created = create_or_update_officer(
             user_uuid, data_copied, user.id_for_audit, UT_INTERACTIVE in data["user_types"])
