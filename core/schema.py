@@ -1436,12 +1436,6 @@ def update_or_create_user(data, user):
                     hf = HealthFacility.objects.filter(id=health_facility_id).first()
                     if hf:
                         officer_location_id = hf.location
-                        if hf.location.parent:
-                            officer_location_id = hf.location.parent
-                            if hf.location.parent.parent:
-                                officer_location_id = hf.location.parent.parent
-                                if hf.location.parent.parent.parent:
-                                    officer_location_id = hf.location.parent.parent.parent
                         data_copied["location_id"] = officer_location_id.id
                 except Exception as e:
                     logger.warning("Error %s ", str(e))
