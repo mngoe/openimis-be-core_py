@@ -1427,18 +1427,16 @@ def update_or_create_user(data, user):
         i_user, i_user_created = None, False
     if UT_OFFICER in data["user_types"]:
         health_facility_id = data.get('health_facility_id', None)
-        location_id = data.get('location_id', None)
         data_copied = data
-        if not location_id:
-            if health_facility_id:
-                try:
-                    apps.get_model('location', 'HealthFacility')
-                    hf = HealthFacility.objects.filter(id=health_facility_id).first()
-                    if hf:
-                        officer_location_id = hf.location
-                        data_copied["location_id"] = officer_location_id.id
-                except Exception as e:
-                    logger.warning("Error %s ", str(e))
+        if health_facility_id:
+            try:
+                apps.get_model('location', 'HealthFacility')
+                hf = HealthFacility.objects.filter(id=health_facility_id).first()
+                if hf:
+                    officer_location_id = hf.location
+                    data_copied["location_id"] = officer_location_id.id
+            except Exception as e:
+                logger.warning("Error %s ", str(e))
 
         officer, officer_created = create_or_update_officer(
             user_uuid, data_copied, user.id_for_audit, UT_INTERACTIVE in data["user_types"])
