@@ -49,6 +49,7 @@ from .models import ModuleConfiguration, FieldControl, MutationLog, Language, Ro
 from .services.roleServices import check_role_unique_name
 from .services.userServices import check_user_unique_email
 from .validation.obligatoryFieldValidation import validate_payload_for_obligatory_fields
+from django.apps import apps
 
 MAX_SMALLINT = 32767
 MIN_SMALLINT = -32768
@@ -1425,8 +1426,20 @@ def update_or_create_user(data, user):
     else:
         i_user, i_user_created = None, False
     if UT_OFFICER in data["user_types"]:
+        health_facility_id = data.get('health_facility_id', None)
+        data_copied = data
+        if health_facility_id:
+            try:
+                apps.get_model('location', 'HealthFacility')
+                hf = HealthFacility.objects.filter(id=health_facility_id).first()
+                if hf:
+                    officer_location_id = hf.location
+                    data_copied["location_id"] = officer_location_id.id
+            except Exception as e:
+                logger.warning("Error %s ", str(e))
+
         officer, officer_created = create_or_update_officer(
-            user_uuid, data, user.id_for_audit, UT_INTERACTIVE in data["user_types"])
+            user_uuid, data_copied, user.id_for_audit, UT_INTERACTIVE in data["user_types"])
     else:
         officer, officer_created = None, False
     if UT_CLAIM_ADMIN in data["user_types"]:
