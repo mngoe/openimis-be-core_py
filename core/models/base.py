@@ -69,6 +69,7 @@ class ModuleConfiguration(UUIDModel):
 
     @classmethod
     def get_or_default(cls, module, default, layer='be'):
+        print("No database ? ", bool(os.environ.get('NO_DATABASE', False)))
         if bool(os.environ.get('NO_DATABASE', False)):
             logger.info('env NO_DATABASE set to True: ModuleConfiguration not loaded from db!')
             return default
@@ -80,6 +81,11 @@ class ModuleConfiguration(UUIDModel):
                 layer=layer,
                 module=module
             ).first()
+            if module == "invoice":
+                print("Query*** ", qs)
+                print("config: ", qs._cfg)
+                result = {**default, **qs._cfg}
+                print("result ", result)
             if qs:
                 db_configuration = qs._cfg
                 return {**default, **db_configuration}
