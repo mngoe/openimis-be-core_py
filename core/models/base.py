@@ -82,10 +82,7 @@ class ModuleConfiguration(UUIDModel):
                 module=module
             ).first()
             if module == "invoice":
-                print("Query*** ", qs)
-                print("config: ", qs._cfg)
                 result = {**default, **qs._cfg}
-                print("result ", result)
             if qs:
                 db_configuration = qs._cfg
                 return {**default, **db_configuration}
