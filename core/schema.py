@@ -829,7 +829,7 @@ class Query(graphene.ObjectType):
 
         text_search = kwargs.get("str")
         if text_search:
-            filters.append(Q(name__icontains=text_search))
+            filters.append(Q(name__icontains=text_search) | Q(alt_language__icontains=text_search))
 
         client_mutation_id = kwargs.get("client_mutation_id", None)
         if client_mutation_id:
