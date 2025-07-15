@@ -18,7 +18,6 @@ from django.conf import settings
 from ..utils import filter_validity
 from .base import *
 from .versioned_model import *
-from django.utils.translation import gettext as _
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +121,6 @@ class Role(VersionedModel):
     is_blocked = models.BooleanField(db_column='IsBlocked')
     audit_user_id = models.IntegerField(
         db_column='AuditUserID', blank=True, null=True)
-
 
     @classmethod
     def get_queryset(cls, queryset, user):
