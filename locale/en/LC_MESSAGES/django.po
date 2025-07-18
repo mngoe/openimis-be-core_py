@@ -102,44 +102,5 @@ msgstr "Field cannot start with whitespace."
 msgid "core.validation.stringFieldValidationMixin.string_ends_with_whitespace"
 msgstr "Field cannot end with whitespace."
 
-msgid "Enrolment Officer"
-msgstr "Enrolment Officer"
-
-msgid "Manager"
-msgstr "Manager"
-
-msgid "Accountant"
-msgstr "Accountant"
-
-msgid "Clerk"
-msgstr "Clerk"
-
-msgid "Medical Officer"
-msgstr "Medical Officer"
-
-msgid "Scheme Administrator"
-msgstr "Scheme Administrator"
-
-msgid "IMIS Administrator"
-msgstr "IMIS Administrator"
-
-msgid "Receptionist"
-msgstr "Receptionist"
-
-msgid "Claim Administrator"
-msgstr "Claim Administrator"
-
-msgid "Claim Contributor"
-msgstr "Claim Contributor"
-
-msgid "HF Administrator"
-msgstr "HF Administrator"
-
-msgid "Offline Administrator"
-msgstr "Offline Administrator"
-
-msgid "Schema Admin"
-msgstr "Schema Admin"
-
-msgid "Task Triage"
-msgstr "Task Triage"
+msgid ""
+msgstr ""

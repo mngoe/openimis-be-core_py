@@ -10,44 +10,5 @@ msgstr ""
 "Language-Team: lokalise.com\n\n"
 "Language: fr_KM\n"
 
-msgid "Enrolment Officer"
-msgstr "Agent d'inscription numero 1"
-
-msgid "Manager"
-msgstr "Gestionnaire"
-
-msgid "Accountant"
-msgstr "Comptable"
-
-msgid "Clerk"
-msgstr "Employé de bureau"
-
-msgid "Medical Officer"
-msgstr "Officier médical"
-
-msgid "Scheme Administrator"
-msgstr "Administrateur de régime"
-
-msgid "IMIS Administrator"
-msgstr "Administrateur IMIS"
-
-msgid "Receptionist"
-msgstr "Réceptionniste"
-
-msgid "Claim Administrator"
-msgstr "Administrateur des réclamations"
-
-msgid "Claim Contributor"
-msgstr "Contributeur aux réclamations"
-
-msgid "HF Administrator"
-msgstr "Administrateur d'établissement de santé"
-
-msgid "Offline Administrator"
-msgstr "Administrateur hors ligne"
-
-msgid "Schema Admin"
-msgstr "Administrateur de schéma"
-
-msgid "Task Triage"
-msgstr "Triage des tâches"
+msgid ""
+msgstr ""
