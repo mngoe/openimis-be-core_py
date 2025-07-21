@@ -6,7 +6,7 @@ from graphene_django import DjangoObjectType
 from location.models import HealthFacility
 from .apps import CoreConfig
 from django.utils.translation import gettext as _
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied 
 
 from .utils import prefix_filterset
 
@@ -36,6 +36,7 @@ class OfficerGQLType(DjangoObjectType):
 
 class RoleGQLType(DjangoObjectType):
     system_role_id = graphene.Int()
+    name = graphene.String()
 
     class Meta:
         model = Role
@@ -47,6 +48,9 @@ class RoleGQLType(DjangoObjectType):
             "is_blocked": ["exact"],
         }
         connection_class = ExtendedConnection
+    
+    def resolve_name(self, info):
+        return _(self.name)
 
     @classmethod
     def get_queryset(cls, queryset, info):
