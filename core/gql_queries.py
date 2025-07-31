@@ -6,8 +6,7 @@ from graphene_django import DjangoObjectType
 from location.models import HealthFacility
 from .apps import CoreConfig
 from django.utils.translation import gettext as _
-from django.core.exceptions import PermissionDenied
-from core.utils import get_first_or_default_language
+from django.core.exceptions import PermissionDenied 
 
 from .utils import prefix_filterset
 
@@ -51,10 +50,7 @@ class RoleGQLType(DjangoObjectType):
         connection_class = ExtendedConnection
     
     def resolve_name(self, info):
-        defaut_language = get_first_or_default_language().code
-        user = info.context.user
-        user_language = getattr(user.i_user, 'language_id', defaut_language) if user.i_user else defaut_language
-        return self.get_display_name(user_language=user_language)
+        return _(self.name)
 
     @classmethod
     def get_queryset(cls, queryset, info):

@@ -18,7 +18,6 @@ from django.conf import settings
 from ..utils import filter_validity
 from .base import *
 from .versioned_model import *
-from core.utils import get_first_or_default_language
 
 logger = logging.getLogger(__name__)
 
@@ -122,15 +121,6 @@ class Role(VersionedModel):
     is_blocked = models.BooleanField(db_column='IsBlocked')
     audit_user_id = models.IntegerField(
         db_column='AuditUserID', blank=True, null=True)
-    
-    def get_display_name(self, user_language=None):
-        """
-        Returns the role name in the user's language if available, otherwise falls back to the default name.
-        """
-        defaut_language = get_first_or_default_language().code
-        if user_language and self.alt_language and user_language != defaut_language:
-            return self.alt_language
-        return self.name
 
     @classmethod
     def get_queryset(cls, queryset, user):

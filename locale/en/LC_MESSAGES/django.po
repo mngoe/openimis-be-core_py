@@ -101,3 +101,6 @@ msgstr "Field cannot start with whitespace."
 
 msgid "core.validation.stringFieldValidationMixin.string_ends_with_whitespace"
 msgstr "Field cannot end with whitespace."
+
+msgid ""
+msgstr ""
