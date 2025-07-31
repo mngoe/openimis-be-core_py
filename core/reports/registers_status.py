@@ -1333,7 +1333,7 @@ template = """
               "elementType": "table_text",
               "id": 259,
               "width": 240,
-              "content": "\"Region: \" + ${region_code} + \" - \" + ${region_name} if ${region_code} != \"XXXX\" else ${region_name}",
+              "content": "'Region: ${region_code} - ${region_name}' if ${region_code} != 'XXXX' else '${region_name}'",
               "eval": true,
               "colspan": "9",
               "styleId": "286",
@@ -2465,7 +2465,7 @@ template = """
               "elementType": "table_text",
               "id": 412,
               "width": 70,
-              "content": "Service Pricelists\n(Services in PLs)",
+              "content": "Service Pricelists (Services in PLs)",
               "eval": false,
               "colspan": "",
               "styleId": "295",
@@ -2511,7 +2511,7 @@ template = """
               "elementType": "table_text",
               "id": 423,
               "width": 70,
-              "content": "Item Pricelists\n(Items in PLs)",
+              "content": "Item Pricelists (Items in PLs)",
               "eval": false,
               "colspan": "",
               "styleId": "295",
@@ -2617,7 +2617,7 @@ template = """
               "elementType": "table_text",
               "id": 452,
               "width": 240,
-              "content": "${district_code} + \" - \" + ${district_name} if ${district_code} != \"XXXX\" else ${district_name}",
+              "content": "'${district_code} - ${district_name}' if ${district_code} != 'XXXX' else '${district_name}'",
               "eval": true,
               "colspan": "",
               "styleId": "296",
@@ -3045,7 +3045,7 @@ template = """
               "elementType": "table_text",
               "id": 363,
               "width": 240,
-              "content": "\"Total for region \" + ${region_code} + \":\" if ${region_code} != \"XXXX\" else \"Total for \" + ${region_name} + \":\"",
+              "content": "'Total for region ${region_code}:' if ${region_code} != 'XXXX' else 'Total for ${region_name}:'",
               "eval": true,
               "colspan": "",
               "styleId": "366",
@@ -5719,4 +5719,4 @@ def registers_status_query(user,
     format_global_totals(report_data, totals)
     report_data["data"] = format_final_data(totals, location_ids_mapping)
 
-    return report_data
+    return report_data 
