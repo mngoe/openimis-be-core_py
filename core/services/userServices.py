@@ -212,6 +212,9 @@ def create_or_update_core_user(user_uuid, username, i_user=None, t_user=None, of
 
     if user and user.i_user and i_user:
         if user.i_user != i_user:
+            from core import datetime
+            now = datetime.datetime.now()
+            user.validity_from = now
             user.validity_to = None
     if not user:
         user = User(username=username)
