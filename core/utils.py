@@ -393,3 +393,7 @@ class ConfigUtilMixin:
         except ImportError as e:
             logger.error(f'Failed to configure function "%s" as "%s.%s": %s',
                          path, cls.__name__, function_name, str(e))
+
+
+def get_cache_key(model, id):
+    return f"cs_{model.__name__}_{id}"
