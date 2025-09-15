@@ -7,6 +7,7 @@ from graphene import Schema
 from graphene.test import Client
 import datetime
 import time
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
@@ -136,3 +137,8 @@ class openIMISGraphQLTestCase(GraphQLTestCase):
 
         params_as_args = [f'{k}:{wrap_arg(v)}' for k, v in params.items() if v is not None]
         return ", ".join(params_as_args)
+    
+    
+    def tearDwon(self):
+        cache.clear()
+        super().tearDwon()
