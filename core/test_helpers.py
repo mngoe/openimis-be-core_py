@@ -42,27 +42,51 @@ def create_test_officer(valid=True, custom_props={}, villages = []):
         result = create_or_update_officer_villages(eo, [v.id for v in villages], 1)
         return eo
 
-def create_test_interactive_user(username='TestInteractiveTest', password="Test1234", roles=None, custom_props=None):
+def create_test_interactive_user(username='TestInteractiveTest', password="S\\:\\/pe®Pąßw0rd""", roles=None,
+                                 custom_props=None):
+    if custom_props is None:
+        custom_props = {}
+    else:
+        custom_props = {k: v for k, v in custom_props.items() if hasattr(InteractiveUser, k)}
     if roles is None:
         roles = [7, 1, 2, 3, 4, 5, 6]
-    i_user = InteractiveUser.objects.create(
-        **{
-            "language_id": "en",
-            "last_name": "TestLastName",
-            "other_names": "Test Other Names",
-            "login_name": username,
-            "audit_user_id": -1,
-            "role_id": roles[0],
-            **(custom_props if custom_props else {})
-        }
-    )
+    user = None
+    i_user = InteractiveUser.objects.filter(login_name=username).first()
+    
+    if i_user:
+        # TODO add custom prop to existing user
+        user = User.objects.filter(i_user=i_user).first()
+    else:
+        user = User.objects.filter(
+            username=username,
+        ).first()
+        user = User.objects.filter(
+            username=username,
+        ).select_related('i_user').first()
+        if user and hasattr(user, 'i_user') and user.i_user is not None:
+            i_user = user.i_user
+        else:
+            i_user = InteractiveUser.objects.create(
+                **{
+                    "language_id": "en",
+                    "last_name": "TestLastName",
+                    "other_names": "Test Other Names",
+                    "login_name": username,
+                    "audit_user_id": -1,
+                    "role_id": roles[0],
+                    **custom_props
+                }
+            )
+   
+    if not user:
+        user = User.objects.create(
+            username=username,
+            i_user=i_user,
+        )
     i_user.set_password(password)
     i_user.save()
     create_or_update_user_roles(i_user, roles, None)
-    return User.objects.create(
-        username=username,
-        i_user=i_user,
-    )
+    return user
 
 
 def create_test_technical_user(
@@ -122,8 +146,5 @@ def compare_dicts(dict1, dict2):
     return recursive_compare(dict1, dict2)
 
 
-
 def AssertMutation(test_obj,mutation_uuid, token ):
     return openIMISGraphQLTestCase().get_mutation_result(mutation_uuid, token)
-
-
