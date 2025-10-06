@@ -274,19 +274,51 @@ class InteractiveUser(VersionedModel):
                 return hf_model.objects.filter(pk=self.health_facility_id).first()
         return None
 
+    # @property
+    # def is_officer(self):
+    #     return Officer.objects.filter(
+    #         code=self.username, has_login=True, validity_to__isnull=True).exists()
     @property
     def is_officer(self):
-        return Officer.objects.filter(
-            code=self.username, has_login=True, validity_to__isnull=True).exists()
+        cache_name = f"user_eo_{self.login_name}"
+        is_officer = cache.get(cache_name)
+        if is_officer is None:
+            is_officer = Officer.objects.filter(
+                code=self.login_name,
+                has_login=True,
+                *filter_validity()
+            ).exists()
+            cache.set(cache_name, is_officer, None)
+        return is_officer
 
+    # @property
+    # def is_claim_admin(self):
+    #     # Unlike Officer ClaimAdmin model was moved to the claim module,
+    #     # and it's not granted that the module is installed.
+    #     if 'claim' in sys.modules:
+    #         from claim.models import ClaimAdmin
+    #         return ClaimAdmin.objects.filter(
+    #             code=self.username, has_login=True, validity_to__isnull=True).exists()
+    #     else:
+    #         return False
+    
     @property
     def is_claim_admin(self):
         # Unlike Officer ClaimAdmin model was moved to the claim module,
         # and it's not granted that the module is installed.
         if 'claim' in sys.modules:
-            from claim.models import ClaimAdmin
-            return ClaimAdmin.objects.filter(
-                code=self.username, has_login=True, validity_to__isnull=True).exists()
+            cache_name = f"user_ca_{self.login_name}"
+            is_claim_admin = cache.get(cache_name)
+            if is_claim_admin is None:
+                
+                from core.models.user import ClaimAdmin
+                is_claim_admin = ClaimAdmin.objects.filter(
+                    code=self.login_name,
+                    has_login=True,
+                    *filter_validity()
+                ).exists()
+                cache.set(cache_name, is_claim_admin, None)
+            return is_claim_admin
         else:
             return False
 
