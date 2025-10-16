@@ -1,6 +1,5 @@
 from abc import ABC
 from typing import Type
-import sys
 from core.models import HistoryModel, VersionedModel
 from django.dispatch import receiver
 from django.db.models.signals import pre_save
@@ -46,22 +45,52 @@ def validator(sender, instance, **kwargs):
     if issubclass(sender, (HistoryModel, VersionedModel)):
         try:
             for f in instance._meta.get_fields():
-                attr = getattr(instance, f.name) if not f.one_to_many and hasattr(instance, f.name) and not f.many_to_many else None
-                if hasattr(f, 'default') and not f.default == models.fields.NOT_PROVIDED and not attr:
-                    setattr(instance, f.name, f.default() if callable(f.default) else f.default)
+                attr = (
+                    getattr(instance, f.name)
+                    if not f.many_to_many
+                    and not f.one_to_many
+                    and hasattr(instance, f.name)
+                    else None
+                )
+                if (
+                    hasattr(f, "default")
+                    and not f.default == models.fields.NOT_PROVIDED
+                    and not attr
+                ):
+                    setattr(
+                        instance,
+                        f.name,
+                        f.default() if callable(f.default) else f.default,
+                    )
                 elif attr:
                     if isinstance(f, models.DecimalField) and f.decimal_places:
-                        setattr(instance, f.name, f"{{:.{f.decimal_places}f}}".format(float(attr)))
+                        setattr(
+                            instance,
+                            f.name,
+                            f"{{:.{f.decimal_places}f}}".format(float(attr)),
+                        )
                     elif isinstance(f, models.IntegerField) and isinstance(attr, str):
                         setattr(instance, f.name, int(attr))
                     elif isinstance(f, models.DateField) and isinstance(attr, str):
-                        setattr(instance, f.name, py_datetime.strptime(attr[:10], "%Y-%m-%d"))
-                    elif isinstance(f, models.DateTimeField) and not isinstance(attr, py_datetime):
-                        if hasattr(attr, 'to_ad_datetime'):
+                        setattr(
+                            instance,
+                            f.name,
+                            py_datetime.strptime(attr[:10], "%Y-%m-%d"),
+                        )
+                    elif isinstance(f, models.DateTimeField) and not isinstance(
+                        attr, py_datetime
+                    ):
+                        if hasattr(attr, "to_ad_datetime"):
                             setattr(instance, f.name, attr.to_ad_datetime())
-                        elif isinstance(f, models.DateTimeField) and isinstance(attr, str):
-                            setattr(instance, f.name, py_datetime.strptime(attr, "%Y-%m-%dT%H:%M:%S"))
-        
+                        elif isinstance(f, models.DateTimeField) and isinstance(
+                            attr, str
+                        ):
+                            setattr(
+                                instance,
+                                f.name,
+                                py_datetime.strptime(attr, "%Y-%m-%dT%H:%M:%S"),
+                            )
+
             instance.full_clean(validate_unique=False)
         except Exception as e:
             msg = f"Object {instance.__class__.__name__} is not respecting the mandatory fields: {e}"
