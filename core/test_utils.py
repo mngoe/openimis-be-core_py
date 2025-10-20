@@ -67,7 +67,7 @@ class UtilsTestCase(TestCase):
             users_0_filter.username,
             "the object should be different, cache not invalidated properly",
         )
-        self.assertNotEquals(
+        self.assertEquals(
             users,
             users_filter,
             "should be the same list even if user_filter comes partially from cache",
