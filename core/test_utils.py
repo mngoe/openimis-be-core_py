@@ -58,7 +58,7 @@ class UtilsTestCase(TestCase):
         users_0_filter.username = users_0_filter.username + "T"
         users_0_filter.save()
         users_filter = list(User.objects.filter(id__in=users_id))
-        caches["default"].delete(f"cd_User_{users_filter[2].id}")
+        caches["default"].delete(f"cs_User_{users_filter[2].id}")
         users.remove(users_0_no_cache_get)
         users_filter.remove(users_0_filter)
         users_0_filter = User.objects.filter(id=users_id[0]).first()
