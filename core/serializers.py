@@ -2,7 +2,23 @@ from rest_framework import serializers
 
 from .apps import CoreConfig
 from .models import User, InteractiveUser, TechnicalUser
+from django.core.cache import cache
+from core.utils import get_cache_key
 
+
+class CachedModelSerializer(serializers.ModelSerializer):
+    cache_ttl = None  # Default cache TTL (infinites)
+
+    def to_representation(self, instance):
+        cache_key = get_cache_key(instance.__class__, instance.id)
+        cached_data = cache.get(cache_key)
+
+        if cached_data is not None:
+            instance = cached_data
+
+        representation = super().to_representation(instance)
+        cache.set(cache_key, representation, self.cache_ttl)
+        return representation
 
 class InteractiveUserSerializer(serializers.ModelSerializer):
     language = serializers.PrimaryKeyRelatedField(many=False, read_only=True)
@@ -18,6 +34,7 @@ class InteractiveUserSerializer(serializers.ModelSerializer):
 
 
 class TechnicalUserSerializer(serializers.ModelSerializer):
+    cache_ttl = 60 * 60
     class Meta:
         model = TechnicalUser
         fields = ('id', 'language', 'username', 'email')
