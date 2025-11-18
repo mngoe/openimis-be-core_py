@@ -290,7 +290,7 @@ class CachedManager(models.Manager):
                         get_cached_foreign_key(cached_instance, fk)
                     logger.debug("Cache hit for key: %s", cache_key)
                     return self._instances_to_queryset([cached_instance], True)
-                elif isinstance(cached_data, (uuid.UUID, str)):
+                elif isinstance(cached_data, (uuid.UUID, str, int)):
                     return self._handle_cache_lookup('pk', cached_data, lookup)
                 else:
                     logger.error("Wrong type in cache for key: %s", cache_key)
@@ -318,7 +318,7 @@ class CachedManager(models.Manager):
                             get_cached_foreign_key(instance, fk)
                         cached_instances.append(instance)
                         logger.debug("Cache hit for key: %s", ck)
-                    elif isinstance(data, (uuid.UUID, str)):
+                    elif isinstance(data, (uuid.UUID, str, int)):
                         cache_result = self._handle_cache_lookup('pk', data, 'exact')  # Note: Use 'exact' for recursion
                         if cache_result:
                             cached_instances.extend(cache_result._result_cache)
@@ -683,6 +683,8 @@ class ConfigUtilMixin:
             logger.error(f'Failed to configure function "%s" as "%s.%s": %s',
                          path, cls.__name__, function_name, str(e))
 
+def clear_cache(instance):
+    cache.delete(get_cache_key(instance.__class__, instance.pk))
 
 def get_cache_key(model, id):
     return f"cs_{model.__name__}_{id}"
