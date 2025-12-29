@@ -188,6 +188,6 @@ class CoreConfig(AppConfig):
         CoreConfig.locked_user_password_hash = cfg["locked_user_password_hash"]
 
         # The scheduler starts as soon as it gets a job, which could be before Django is ready, so we enable it here
-        from core import scheduler
-        if settings.SCHEDULER_AUTOSTART:
-            scheduler.start()
+        # from core import scheduler
+        # if settings.SCHEDULER_AUTOSTART:
+        #     scheduler.start()
