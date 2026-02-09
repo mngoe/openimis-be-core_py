@@ -3110,7 +3110,7 @@ def determine_description(entity, element):
                 displayed_type = payer_type[1]
                 break
         return f"Payer {element.name} - type {displayed_type}"
-    if entity == ENTITY_PHOTO:
+    if entity == ENTITY_PHOTO and element.insuree:
         return f"Insuree Picture for Insuree {element.insuree.chf_id}"
     if entity == ENTITY_PL_ITEM:
         location = element.location
@@ -3163,16 +3163,17 @@ def fetch_entity_data(requested_entity: str,
                       trigger_missing_entity_error=True):
     data = []
     try:
-        manager = apps.get_model(MODULE_MAPPING[requested_entity], requested_entity)
+        manager = apps.get_model(
+            MODULE_MAPPING[requested_entity], requested_entity)
         # TODO : prepare a mapping of the list of fields that are needed for each entity -> use .only(list) ?
         filters = (
-                          Q(validity_to__lte=report_params["date_to"])
-                          & Q(validity_to__gte=report_params["date_from"])
-                  ) | (
-                          Q(validity_to__isnull=True)
-                          & Q(validity_from__lte=report_params["date_to"])
-                          & Q(validity_from__gte=report_params["date_from"])
-                  )
+            Q(validity_to__lte=report_params["date_to"])
+            & Q(validity_to__gte=report_params["date_from"])
+        ) | (
+            Q(validity_to__isnull=True)
+            & Q(validity_from__lte=report_params["date_to"])
+            & Q(validity_from__gte=report_params["date_from"])
+        )
         if user_id != ALL_USERS:
             filters &= Q(audit_user_id=user_id)
         elements = manager.objects.filter(filters) \
@@ -3183,7 +3184,8 @@ def fetch_entity_data(requested_entity: str,
 
         for element in elements:
 
-            action_type = determine_action_type(element.id, element.validity_to, element.legacy_id, known_legacy_ids)
+            action_type = determine_action_type(
+                element.id, element.validity_to, element.legacy_id, known_legacy_ids)
             if action_type != report_params["action"] and report_params["action"] != ACTION_ALL:
                 continue
 
@@ -3201,6 +3203,8 @@ def fetch_entity_data(requested_entity: str,
     except LookupError:
         if trigger_missing_entity_error:
             return False, data
+
+    return False, data
 
 
 def map_user_ids_to_user_names():
@@ -3249,7 +3253,8 @@ def user_activity_query(user,
 
     # Fetching data for a single entity
     if entity != ENTITY_ALL:
-        fetch_success, entity_data = fetch_entity_data(entity, header, user_id, user_names_mapping)
+        fetch_success, entity_data = fetch_entity_data(
+            entity, header, user_id, user_names_mapping)
 
         if fetch_success:
             entity_data.sort(key=lambda x: (x["user_name"], x["datetime"]))
@@ -3273,4 +3278,4 @@ def user_activity_query(user,
         fetched_data.sort(key=lambda x: (x["user_name"], x["datetime"]))
         report_data["data"] = fetched_data
 
-        return report_data
+        return report_data 
