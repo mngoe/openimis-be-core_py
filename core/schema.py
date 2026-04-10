@@ -1555,7 +1555,8 @@ class ResetPasswordMutation(graphene.relay.ClientIDMutation):
             reset_user_password(info.context, username)
             return ResetPasswordMutation(success=True)
         except Exception as exc:
-            logger.exception(exc)
+            if not isinstance(exc, User.DoesNotExist): #Not sending UserDoesNotExist error to SENTRY
+                logger.exception(exc)
             return ResetPasswordMutation(
                 success=False,
                 error=gettext_lazy("Failed to reset password."),
