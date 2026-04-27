@@ -2,7 +2,7 @@ from django.core.cache import cache
 from rest_framework import serializers
 
 from .apps import CoreConfig
-from .models import User, InteractiveUser, TechnicalUser
+from .models import User, InteractiveUser, TechnicalUser, Role
 from core.utils import get_cache_key
 
 
@@ -26,7 +26,7 @@ class RoleSummarySerializer(serializers.Serializer):
     name = serializers.CharField()
 
 
-class LocationSerializer(serializers.ModelSerializer):
+class LocationSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     uuid = serializers.UUIDField()
     code = serializers.CharField()
