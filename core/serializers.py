@@ -2,9 +2,7 @@ from django.core.cache import cache
 from rest_framework import serializers
 
 from .apps import CoreConfig
-from .models import InteractiveUser, Officer, Role, TechnicalUser, User
-from claim.models import ClaimAdmin
-from location.models import Location
+from .models import User, InteractiveUser, TechnicalUser
 from core.utils import get_cache_key
 
 
@@ -23,18 +21,18 @@ class CachedModelSerializer(serializers.ModelSerializer):
         return representation
 
 
-class RoleSummarySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Role
-        fields = ("id", "name")
+class RoleSummarySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
 
 
 class LocationSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField()
+    uuid = serializers.UUIDField()
+    code = serializers.CharField()
+    name = serializers.CharField()
+    type = serializers.CharField()
     parent = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Location
-        fields = ("id", "uuid", "code", "name", "type", "parent")
 
     def get_parent(self, obj):
         if not obj or not getattr(obj, "parent", None):
@@ -43,73 +41,50 @@ class LocationSerializer(serializers.ModelSerializer):
 
 
 class PricelistSummarySerializer(serializers.Serializer):
-    id = serializers.IntegerField(read_only=True)
-    uuid = serializers.CharField(read_only=True)
+    id = serializers.IntegerField()
+    uuid = serializers.CharField()
 
 
 class ProgramSerializer(serializers.Serializer):
-    idProgram = serializers.IntegerField(read_only=True)
-    nameProgram = serializers.CharField(read_only=True)
+    idProgram = serializers.IntegerField()
+    nameProgram = serializers.CharField()
 
 
-class HealthFacilitySerializer(serializers.ModelSerializer):
-    services_pricelist = PricelistSummarySerializer(read_only=True)
-    items_pricelist = PricelistSummarySerializer(read_only=True)
+class HealthFacilitySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    uuid = serializers.UUIDField()
+    code = serializers.CharField()
+    name = serializers.CharField()
+    level = serializers.CharField()
+    servicesPricelist = PricelistSummarySerializer(source="services_pricelist")
+    itemsPricelist = PricelistSummarySerializer(source="items_pricelist")
+    contractStartDate = serializers.DateField(source="contract_start_date")
+    contractEndDate = serializers.DateField(source="contract_end_date")
+    location = LocationSerializer()
+    program = ProgramSerializer(many=True)
+
+
+class OfficerSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    uuid = serializers.UUIDField()
+    code = serializers.CharField()
+    dob = serializers.DateField()
+    address = serializers.CharField()
+    lastName = serializers.CharField(source="last_name")
+    otherNames = serializers.CharField(source="other_names")
     location = LocationSerializer(read_only=True)
 
-    program = ProgramSerializer(many=True, read_only=True)
 
-    class Meta:
-        model = ClaimAdmin._meta.get_field("health_facility").related_model
-        fields = (
-            "id",
-            "uuid",
-            "code",
-            "name",
-            "level",
-            "services_pricelist",
-            "items_pricelist",
-            "program",
-            "contract_start_date",
-            "contract_end_date",
-            "location",
-        )
-
-
-class OfficerSerializer(serializers.ModelSerializer):
-    location = LocationSerializer(read_only=True)
-
-    class Meta:
-        model = Officer
-        fields = (
-            "id",
-            "uuid",
-            "code",
-            "dob",
-            "address",
-            "last_name",
-            "other_names",
-            "location",
-        )
-
-
-class ClaimAdminSerializer(serializers.ModelSerializer):
-    health_facility = HealthFacilitySerializer(read_only=True)
-
-    class Meta:
-        model = ClaimAdmin
-        fields = (
-            "id",
-            "uuid",
-            "code",
-            "has_login",
-            "email_id",
-            "phone",
-            "dob",
-            "last_name",
-            "other_names",
-            "health_facility",
-        )
+class ClaimAdminSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    uuid = serializers.UUIDField()
+    code = serializers.CharField()
+    emailId = serializers.CharField(source="email_id")
+    phone = serializers.CharField()
+    dob = serializers.DateField()
+    lastName = serializers.CharField(source="last_name")
+    otherNames = serializers.CharField(source="other_names")
+    healthFacility = HealthFacilitySerializer(source="health_facility")
 
 
 class InteractiveUserSerializer(serializers.ModelSerializer):
@@ -167,8 +142,8 @@ class TechnicalUserSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     i_user = InteractiveUserSerializer(many=False, read_only=True)
     t_user = TechnicalUserSerializer(many=False, read_only=True)
-    claim_admin = ClaimAdminSerializer(read_only=True)
-    officer = OfficerSerializer(read_only=True)
+    claim_admin = ClaimAdminSerializer(many=False, read_only=True)
+    officer = OfficerSerializer(many=False, read_only=True)
 
     class Meta:
         model = User
