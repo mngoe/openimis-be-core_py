@@ -59,6 +59,22 @@ core = sys.modules["core"]
 logger = logging.getLogger(__name__)
 
 
+def get_client_ip(request):
+    """Extracts the client's IP from the request"""
+    remote_addr = (
+        request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() or
+        (request.META.get('HTTP_X_REAL_IP') or '').strip() or
+        request.META.get('REMOTE_ADDR', 'Unknown')
+    )
+    ip1 = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip()
+    ip2 = (request.META.get('HTTP_X_REAL_IP') or '').strip()
+    ip3 = request.META.get('REMOTE_ADDR', 'Unknown')
+    logger.warning("ip1 %s", ip1)
+    logger.warning("ip2 %s", ip2)
+    logger.warning("ip3 %s", ip3)
+
+    return remote_addr
+
 class SmallInt(graphene.Int):
     """
     This represents a small Integer, with values ranging from -32768 to +32767
@@ -255,6 +271,16 @@ class OpenIMISMutation(graphene.relay.ClientIDMutation):
 
     @classmethod
     def mutate_and_get_payload(cls, root, info, **data):
+        ip = get_client_ip(info.context)
+        logger.warning("Extracted IP: %s", ip)
+        if cls.__qualname__ == "CreateClaimMutation":
+            data["user_entered_ip_address"] = ip
+        if cls.__qualname__ in ["UpdateClaimMutation", "SaveClaimReviewMutation"]:
+            data["last_updater_ip_address"] = ip
+        if cls.__qualname__ == "SubmitClaimsMutation":
+            data["user_submit_ip_address"] = ip
+        if cls.__qualname__ in ["ProcessClaimsMutation", "DeliverClaimsReviewMutation"]:
+            data["user_processed_ip_address"] = ip
         mutation_log = MutationLog.objects.create(
             json_content=json.dumps(data, cls=OpenIMISJSONEncoder),
             user_id=info.context.user.id if info.context.user else None,
