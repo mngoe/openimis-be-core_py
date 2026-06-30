@@ -6,7 +6,7 @@ from django.db import models
 #from core.datetimes.ad_datetime import datetime as py_datetime
 
 from ..fields import DateTimeField
-from ..utils import filter_validity, get_cache_key
+from ..utils import filter_validity as core_filter_validity, get_cache_key
 from django.db.models import Q
 from django.db.models.query import QuerySet
 from core.utils import (
@@ -24,6 +24,10 @@ class BaseVersionedModel(CachedModelMixin, models.Model):
 
     # Use our custom CachedManager for object retrieval
     objects = CachedManager()
+
+    @staticmethod
+    def filter_validity(validity=None, prefix="", **kwargs):
+        return core_filter_validity(validity=validity, prefix=prefix, **kwargs)
 
     def update(self, *args, **kwargs):
         """
@@ -85,7 +89,7 @@ class BaseVersionedModel(CachedModelMixin, models.Model):
     def filter_queryset(cls, queryset=None):
         if queryset is None:
             queryset = cls.objects.all()
-        queryset = queryset.filter(*filter_validity())
+        queryset = queryset.filter(*core_filter_validity())
         return queryset
 
 
