@@ -18,6 +18,7 @@ from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError, FieldDoesNotExist
 from django.core.files.storage import default_storage
 from django.core.cache import caches
+import threading
 
 logger = logging.getLogger(__file__)
 
@@ -40,6 +41,17 @@ __all__ = [
     "ExtendedRelayConnection",
 ]
 
+_request_local = threading.local()
+
+def get_current_user():
+    return getattr(_request_local, "user", None)
+
+def set_current_user(user):
+    _request_local.user = user
+
+def clear_current_user():
+    if hasattr(_request_local, "user"):
+        del _request_local.user
 
 class TimeUtils(object):
 
