@@ -18,6 +18,7 @@ from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError, FieldDoesNotExist
 from django.core.files.storage import default_storage
 from django.core.cache import caches
+from functools import lru_cache
 import threading
 
 logger = logging.getLogger(__file__)
