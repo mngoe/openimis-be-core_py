@@ -5,7 +5,7 @@ import logging
 from celery import shared_task
 from core.models import MutationLog, Language
 from django.utils import translation
-
+from core.utils import set_current_user
 logger = logging.getLogger(__name__)
 
 
@@ -22,6 +22,8 @@ def openimis_mutation_async(mutation_id, module, class_name):
     mutation = None
     try:
         mutation = MutationLog.objects.get(id=mutation_id)
+        if mutation.user:
+            set_current_user(mutation.user)
         # __import__ needs to import the module with .schema to force .schema to load, then .schema.TheRealMutation
         mutation_class = getattr(__import__(f"{module}.schema").schema, class_name)
 
