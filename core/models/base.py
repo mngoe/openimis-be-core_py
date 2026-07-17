@@ -82,6 +82,7 @@ class ModuleConfiguration(UUIDModel):
         cached = cache.get(cache_key)
         if cached is not None:
             logger.info("ModuleConfiguration cache hit for %s/%s", layer, module)
+            print("ModuleConfiguration cache hit for %s/%s", layer, module)
             return cached
 
         logger.info("Getting configuration from database")

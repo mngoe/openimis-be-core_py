@@ -46,6 +46,7 @@ class UserTestCase(TestCase):
 class GetOrDefaultTestCase(TestCase):
     """Tests de ModuleConfiguration.get_or_default"""
 
+    # CACHE_PATCH_TARGET = f"{ModuleConfiguration.__module__}.cache"
     def setUp(self) -> None:
         super().setUp()
         self.module = "test_module"
@@ -56,14 +57,14 @@ class GetOrDefaultTestCase(TestCase):
     def tearDown(self) -> None:
         super().tearDown()
         # Nettoyage explicite au cas où un test toucherait le vrai cache
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             pass
 
     # ---- NO_DATABASE ----
 
     @mock.patch.dict(os.environ, {"NO_DATABASE": "True"})
     def test_no_database_env_returns_default_without_touching_cache_or_db(self):
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             result = ModuleConfiguration.get_or_default(
                 self.module, self.default, layer=self.layer
             )
@@ -77,7 +78,7 @@ class GetOrDefaultTestCase(TestCase):
     def test_cache_hit_returns_cached_value_without_db_query(self):
         cached_value = {"key_default": "cached_value"}
 
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             mocked_cache.get.return_value = cached_value
             with mock.patch.object(
                 ModuleConfiguration, "objects"
@@ -102,7 +103,7 @@ class GetOrDefaultTestCase(TestCase):
             is_exposed=False,
         )
 
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             mocked_cache.get.return_value = None
 
             result = ModuleConfiguration.get_or_default(
@@ -119,7 +120,7 @@ class GetOrDefaultTestCase(TestCase):
     # ---- Cache miss, aucune entrée DB ----
 
     def test_cache_miss_no_db_entry_returns_default_and_sets_cache(self):
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             mocked_cache.get.return_value = None
 
             result = ModuleConfiguration.get_or_default(
@@ -143,7 +144,7 @@ class GetOrDefaultTestCase(TestCase):
             is_disabled_until=future,
         )
 
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             mocked_cache.get.return_value = None
 
             result = ModuleConfiguration.get_or_default(
@@ -164,7 +165,7 @@ class GetOrDefaultTestCase(TestCase):
             is_disabled_until=past,
         )
 
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             mocked_cache.get.return_value = None
 
             result = ModuleConfiguration.get_or_default(
@@ -183,7 +184,7 @@ class GetOrDefaultTestCase(TestCase):
             is_disabled_until=None,
         )
 
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             mocked_cache.get.return_value = None
 
             result = ModuleConfiguration.get_or_default(
@@ -210,7 +211,7 @@ class GetOrDefaultTestCase(TestCase):
             config=json.dumps({"key_default": "wrong_module"}),
         )
 
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             mocked_cache.get.return_value = None
 
             result = ModuleConfiguration.get_or_default(
@@ -222,7 +223,7 @@ class GetOrDefaultTestCase(TestCase):
     # ---- Exception pendant la requête DB ----
 
     def test_exception_during_db_query_returns_default_and_does_not_set_cache(self):
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             mocked_cache.get.return_value = None
             with mock.patch.object(
                 ModuleConfiguration.objects, "filter", side_effect=Exception("db down")
@@ -245,7 +246,7 @@ class GetOrDefaultTestCase(TestCase):
             config=json.dumps(db_config),
         )
 
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             mocked_cache.get.return_value = None
             result = ModuleConfiguration.get_or_default(self.module, self.default)
 
@@ -278,7 +279,7 @@ class SaveMethodTestCase(TestCase):
         )
         expected_key = "module_config:be:save_module"
 
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             instance.save()
             mocked_cache.delete.assert_called_once_with(expected_key)
 
@@ -291,7 +292,7 @@ class SaveMethodTestCase(TestCase):
         )
         expected_key = "module_config:fe:save_module"
 
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             instance.version = "2.0"
             instance.save()
             mocked_cache.delete.assert_called_once_with(expected_key)
@@ -320,7 +321,7 @@ class DeleteMethodTestCase(TestCase):
     def test_delete_invalidates_cache_key(self):
         expected_key = "module_config:be:delete_module"
 
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             self.instance.delete()
             mocked_cache.delete.assert_called_once_with(expected_key)
 
@@ -332,7 +333,7 @@ class DeleteMethodTestCase(TestCase):
         def fake_cache_delete(key):
             call_order.append("cache_delete")
 
-        with mock.patch("core.models.cache") as mocked_cache:
+        with mock.patch("django.core.cache") as mocked_cache:
             mocked_cache.delete.side_effect = fake_cache_delete
             with mock.patch(
                 "django.db.models.Model.delete",
