@@ -23,7 +23,7 @@ DEFAULT_CFG = {
     "longstrfdate": "%a %d %B %Y",
     "iso_raw_date": "False",
     "age_of_majority": "18",
-    "async_mutations": "True" if os.environ.get("ASYNC", os.environ.get("MODE", "PROD")) == "PROD" else "False",
+    "async_mutations": "True" if os.environ.get("ASYNC", os.environ.get("MODE", "PROD")).lower() == "prod" else "False",
     "password_reset_template": "password_reset.txt",
     "currency": "$",
     "gql_query_users_perms": ["121701"],
@@ -134,6 +134,7 @@ class CoreConfig(AppConfig):
         except Group.DoesNotExist:
             g = Group(name=group)
             g.save()
+        try:
             from django.contrib.auth.models import Permission
             p = Permission.objects.get(codename="view_user")
             g.permissions.add(p)
