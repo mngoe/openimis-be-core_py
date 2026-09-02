@@ -143,6 +143,11 @@ class RoleRight(VersionedModel):
     role = models.ForeignKey(Role, models.DO_NOTHING,
                              db_column='RoleID', related_name="rights")
     right_id = models.IntegerField(db_column='RightID')
+    uba = models.BooleanField(
+        db_column='UBA', default=False,
+        help_text="False: the right is in the global bag, it is granted everywhere. "
+                  "True: the right is granted only on the instances the user has a "
+                  "UserBusinessAccess link on, it never appears in the global bag.")
     audit_user_id = models.IntegerField(
         db_column='AuditUserId', blank=True, null=True)
 
@@ -159,6 +164,13 @@ class RoleRight(VersionedModel):
     class Meta:
         managed = True
         db_table = 'tblRoleRight'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['role', 'right_id', 'uba'],
+                condition=models.Q(validity_to__isnull=True),
+                name='rolerigh_unique_valid_role_right_uba',
+            )
+        ]
 
 
 class InteractiveUser(VersionedModel):
@@ -240,11 +252,40 @@ class InteractiveUser(VersionedModel):
         return False
 
     @property
+    def role_ids(self):
+        return [r.role_id for r in UserRole.filter_queryset().filter(user_id=self.id)]
+
+    def rights_for(self, uba=False):
+        """
+        Right ids carried by the roles of that user.
+        `uba=False` (default) is the global bag, `uba=True` the UBA-only bag,
+        `uba=None` both, i.e. the rights that can be granted through a
+        UserBusinessAccess link on a given business object.
+        """
+        queryset = RoleRight.filter_queryset().filter(role_id__in=self.role_ids)
+        if uba is not None:
+            queryset = queryset.filter(uba=uba)
+        return list(queryset.values_list('right_id', flat=True).distinct())
+
+    @property
     def rights(self):
-        rights = [rr.right_id for rr in RoleRight.filter_queryset().filter(
-            role_id__in=[r.role_id for r in UserRole.filter_queryset().filter(
-                user_id=self.id)]).distinct()]
-        return rights
+        """The global bag: UBA-only rights are deliberately not part of it."""
+        return self.rights_for(uba=False)
+
+    @property
+    def uba_rights(self):
+        """
+        The UBA-only bag: rights the user never holds globally, granted solely on the
+        business objects reached through a UserBusinessAccess link. Disjoint from
+        `rights` by construction, the two are filtered on opposite values of
+        `RoleRight.uba`.
+        """
+        return self.rights_for(uba=True)
+
+    @property
+    def rights_for_uba(self):
+        """Rights that count on a business object the user has a UBA link on (uba True or False)."""
+        return self.rights_for(uba=None)
 
     @property
     def rights_str(self):
@@ -379,11 +420,59 @@ class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
     def _u(self):
         return self.i_user or self.officer or self.claim_admin or self.t_user
 
-    def has_perms(self, perm_list, obj=None):
+    def has_perms(self, perm_list, obj=None, access_requirements=None):
+        """
+        Single permission entry point.
+
+        Without `access_requirements` only the global bag counts: rights assigned to
+        the user's roles with `RoleRight.uba = False`.
+
+        With `access_requirements` (the business map, e.g.
+        `['location.healthfacility', hf_uuid]` or, demanding a credential,
+        `['location.healthfacility', hf_uuid, 'HF_CLAIM_ADMIN']`), a right the global
+        bag does not cover is still granted when the user has a valid
+        UserBusinessAccess link on that instance, under one of the link types the map
+        demands, and the right sits in their UBA bag.
+        """
         if self.is_imis_admin:
             return True
-        else:
-            return super().has_perms(perm_list, obj)
+        if isinstance(perm_list, str):
+            perm_list = [perm_list]
+        if super().has_perms(perm_list, obj):
+            return True
+        from .user_business_access import normalize_access_requirements
+
+        business_maps = normalize_access_requirements(access_requirements)
+        if not business_maps:
+            return False
+        for perm in perm_list:
+            if self.has_perm(perm, obj):
+                continue
+            if not self._has_business_access_perm(perm, business_maps):
+                return False
+        return True
+
+    def _has_business_access_perm(self, perm, business_maps):
+        """
+        Is `perm` granted to that user on one of the business objects of `business_maps` ?
+
+        The link and the right are two independent questions: the UserBusinessAccess row
+        says which credential the user holds on the instance, the UBA bag says which
+        rights that user can exercise on an instance at all. openIMIS roles are only
+        bundles of rights, they never identify the link.
+        """
+        from .user_business_access import UserBusinessAccess
+
+        try:
+            right_id = int(perm)
+        except (TypeError, ValueError):
+            # UBA only scopes openIMIS numeric rights, django perms stay global
+            return False
+        i_user = InteractiveUser.is_interactive_user(self)
+        # reached only once the global bag has failed, so the UBA-only bag is the one left
+        if i_user is None or right_id not in i_user.uba_rights:
+            return False
+        return UserBusinessAccess.has_access(self, business_maps)
 
     @property
     def id_for_audit(self):

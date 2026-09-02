@@ -75,6 +75,7 @@ class RoleRightGQLType(DjangoObjectType):
         filter_fields = {
             "id": ["exact"],
             "right_id": ["exact"],
+            "uba": ["exact"],
             **prefix_filterset("role__", RoleGQLType._meta.filter_fields),
         }
         connection_class = ExtendedConnection

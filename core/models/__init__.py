@@ -22,6 +22,7 @@ Officer = user.Officer
 Group = user.Group
 RoleRight=user.RoleRight
 Role=user.Role
+UserBusinessAccess=user_business_access.UserBusinessAccess
 ExportableQueryModel=base_mutation.ExportableQueryModel
 UserMutation=user_mutation.UserMutation
 RoleMutation=user_mutation.RoleMutation

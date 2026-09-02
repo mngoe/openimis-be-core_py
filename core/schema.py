@@ -48,6 +48,7 @@ from .utils import flatten_dict
 from .models import ModuleConfiguration, FieldControl, MutationLog, Language, RoleMutation, UserMutation
 from .services.roleServices import check_role_unique_name
 from .services.userServices import check_user_unique_email
+from .receivers import clear_role_rights_cache
 from .validation.obligatoryFieldValidation import validate_payload_for_obligatory_fields
 
 MAX_SMALLINT = 32767
@@ -991,10 +992,41 @@ class RoleBase:
     alt_language = graphene.String(required=False, max_length=50)
     is_system = graphene.Boolean(required=True)
     is_blocked = graphene.Boolean(required=True)
-    # field to save all chosen rights to the role
+    # field to save all chosen rights to the role, granted globally (RoleRight.uba = False)
     rights_id = graphene.List(graphene.Int, required=False)
+    # field to save the rights granted only on the business objects the user is linked to
+    # through a UserBusinessAccess row (RoleRight.uba = True)
+    uba_rights_id = graphene.List(graphene.Int, required=False)
 
     system_role_id = graphene.Int(required=False)
+
+
+def update_role_rights_bag(role, rights_id, uba, now):
+    """
+    Reset one of the two right bags of a role: `uba=False` is the global bag,
+    `uba=True` the one only granted on the business objects the user is linked to.
+    `rights_id` None means "leave that bag alone".
+    """
+    if rights_id is None:
+        return
+    RoleRight.objects.filter(
+        role_id=role.id, uba=uba, validity_to__isnull=True).update(validity_to=now)
+    for right_id in rights_id:
+        # only a row closed by this very call is reopened, so older history is left alone and
+        # the (role, right_id, uba) unique constraint on valid rows still holds
+        role_right = RoleRight.objects.filter(
+            role_id=role.id, right_id=right_id, uba=uba, validity_to=now).first()
+        if role_right is None:
+            RoleRight.objects.create(
+                role_id=role.id,
+                right_id=right_id,
+                uba=uba,
+                audit_user_id=role.audit_user_id,
+                validity_from=now,
+            )
+        else:
+            role_right.validity_to = None
+            role_right.save()
 
 
 def update_or_create_role(data, user):
@@ -1007,44 +1039,37 @@ def update_or_create_role(data, user):
         data.pop('client_mutation_label')
     role_uuid = data.pop('uuid') if 'uuid' in data else None
     rights_id = data.pop('rights_id') if "rights_id" in data else None
+    uba_rights_id = data.pop('uba_rights_id') if "uba_rights_id" in data else None
     if role_uuid:
         role = Role.objects.get(uuid=role_uuid)
         role.save_history()
         [setattr(role, k, v) for k, v in data.items()]
         role.save()
-        if rights_id is not None:
-            # reset all role rights assigned to the chosen role
-            from core import datetime
-            now = datetime.datetime.now()
-            role_rights_currently_assigned = RoleRight.objects.filter(role_id=role.id)
-            role_rights_currently_assigned.update(validity_to=now)
-            role_rights_currently_assigned = role_rights_currently_assigned.values_list('right_id', flat=True)
-            for right_id in rights_id:
-                if right_id not in role_rights_currently_assigned:
-                    # create role right because it is a new role right
-                    RoleRight.objects.create(
-                        role_id=role.id,
-                        right_id=right_id,
-                        audit_user_id=role.audit_user_id,
-                        validity_from=now,
-                    )
-                else:
-                    # set date valid to - None
-                    role_right = RoleRight.objects.get(Q(role_id=role.id, right_id=right_id))
-                    role_right.validity_to = None
-                    role_right.save()
+        from core import datetime
+        now = datetime.datetime.now()
+        # each bag is reset independently: a client that only sends rights_id leaves the UBA bag untouched
+        update_role_rights_bag(role, rights_id, uba=False, now=now)
+        update_role_rights_bag(role, uba_rights_id, uba=True, now=now)
+        if rights_id is not None or uba_rights_id is not None:
+            # update_role_rights_bag closes the previous rows with a queryset .update(),
+            # which fires no post_delete; emptying a bag fires no receiver at all. This
+            # also re-clears after the row changes, the Role post_save above ran before.
+            clear_role_rights_cache(role.id)
     else:
         role = Role.objects.create(**data)
         # create role rights for that role if they were passed to mutation
-        if rights_id:
+        for uba, bag in ((False, rights_id), (True, uba_rights_id)):
+            if not bag:
+                continue
             [RoleRight.objects.create(
                 **{
                     "role_id": role.id,
                     "right_id": right_id,
+                    "uba": uba,
                     "audit_user_id": role.audit_user_id,
                     "validity_from": data['validity_from'],
                 }
-            ) for right_id in rights_id]
+            ) for right_id in bag]
         if client_mutation_id:
             RoleMutation.object_mutated(user, role=role, client_mutation_id=client_mutation_id)
         return role
@@ -1061,6 +1086,7 @@ def duplicate_role(data, user):
         data.pop('client_mutation_label')
     role_uuid = data.pop('uuid') if 'uuid' in data else None
     rights_id = data.pop('rights_id') if "rights_id" in data else None
+    uba_rights_id = data.pop('uba_rights_id') if "uba_rights_id" in data else None
     # get the current Role object to be duplicated
     role = Role.objects.get(uuid=role_uuid)
     # copy Role to be dupliacated
@@ -1072,34 +1098,38 @@ def duplicate_role(data, user):
     duplicated_role.validity_from = now
     [setattr(duplicated_role, k, v) for k, v in data.items()]
     duplicated_role.save()
-    if rights_id:
-        # reset all role rights assigned to the chosen role
-        role_rights_currently_assigned = RoleRight.objects.filter(role_id=role.id)
-        role_rights_currently_assigned = role_rights_currently_assigned.values_list('right_id', flat=True)
-        for right_id in rights_id:
-            validity_from = now
-            if right_id in role_rights_currently_assigned:
-                # role right exist - we can assign validity_from from old entity
-                validity_from = role.validity_from
-            # create role right for duplicate role
-            RoleRight.objects.create(
+    for uba, bag in ((False, rights_id), (True, uba_rights_id)):
+        if bag:
+            # reset the bag with the rights passed to the mutation
+            role_rights_currently_assigned = RoleRight.objects.filter(
+                role_id=role.id, uba=uba, validity_to__isnull=True).values_list('right_id', flat=True)
+            for right_id in bag:
+                validity_from = now
+                if right_id in role_rights_currently_assigned:
+                    # role right exist - we can assign validity_from from old entity
+                    validity_from = role.validity_from
+                # create role right for duplicate role
+                RoleRight.objects.create(
+                    **{
+                        "role_id": duplicated_role.id,
+                        "right_id": right_id,
+                        "uba": uba,
+                        "audit_user_id": duplicated_role.audit_user_id,
+                        "validity_from": validity_from,
+                    }
+                )
+        else:
+            # nothing passed for that bag, copy it from the duplicated role
+            [RoleRight.objects.create(
                 **{
                     "role_id": duplicated_role.id,
-                    "right_id": right_id,
+                    "right_id": role_right.right_id,
+                    "uba": uba,
                     "audit_user_id": duplicated_role.audit_user_id,
-                    "validity_from": validity_from,
+                    "validity_from": now,
                 }
-            )
-    else:
-        role_rights_currently_assigned = RoleRight.objects.filter(role_id=role.id)
-        [RoleRight.objects.create(
-            **{
-                "role_id": duplicated_role.id,
-                "right_id": role_right.right_id,
-                "audit_user_id": duplicated_role.audit_user_id,
-                "validity_from": now,
-            }
-        ) for role_right in role_rights_currently_assigned]
+            ) for role_right in RoleRight.objects.filter(
+                role_id=role.id, uba=uba, validity_to__isnull=True)]
 
     if client_mutation_id:
         RoleMutation.object_mutated(user, role=duplicated_role, client_mutation_id=client_mutation_id)
@@ -1229,8 +1259,10 @@ class DuplicateRoleMutation(OpenIMISMutation):
         alt_language = graphene.String(required=False, max_length=50)
         is_system = graphene.Boolean(required=True)
         is_blocked = graphene.Boolean(required=True)
-        # field to save all chosen rights to the role
+        # field to save all chosen rights to the role, granted globally (RoleRight.uba = False)
         rights_id = graphene.List(graphene.Int, required=False)
+        # field to save the rights granted only through a UserBusinessAccess link (RoleRight.uba = True)
+        uba_rights_id = graphene.List(graphene.Int, required=False)
 
     @classmethod
     def async_mutate(cls, user, **data):

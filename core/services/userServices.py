@@ -84,8 +84,13 @@ def create_or_update_user_roles(i_user, role_ids, audit_user_id):
         UserRole.objects.create(
             user=i_user, role_id=role_id, audit_user_id=audit_user_id
         )
-    cache.delete('rights_'+str(i_user.id))
-    cache.delete('is_admin_'+str(i_user.id))
+    # Redundant as soon as role_ids holds something, the creates above each fire the
+    # post_save receiver. It is the only invalidation when role_ids is empty: stripping
+    # every role only runs the .update() closing the rows, which fires no receiver.
+    from core.receivers import clear_user_rights_cache
+
+    clear_user_rights_cache(i_user.id)
+
 
 
 # TODO move to location module ?

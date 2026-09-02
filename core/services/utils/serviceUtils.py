@@ -22,10 +22,22 @@ def check_authentication(function):
     return wrapper
 
 
-def check_permissions(permissions=None):
+def check_permissions(permissions=None, access_requirements=None):
+    """
+    `access_requirements` is the optional business map used to fall back on the
+    UserBusinessAccess links when the global rights are not enough. It is either the
+    map itself (`['location.healthfacility', hf_uuid]`) or a callable receiving the
+    decorated call `(self, *args, **kwargs)` and returning it.
+    """
     def decorator(function):
         def wrapper(self, *args, **kwargs):
-            if not self.user.has_perms(permissions):
+            business_map = access_requirements
+            if callable(business_map):
+                business_map = business_map(self, *args, **kwargs)
+            # only core.User accepts the business map, keep the plain call for the other user types
+            has_perms = (self.user.has_perms(permissions, access_requirements=business_map)
+                         if business_map else self.user.has_perms(permissions))
+            if not has_perms:
                 return {
                     "success": False,
                     "message": "Permissions required",
