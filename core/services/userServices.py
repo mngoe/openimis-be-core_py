@@ -2,6 +2,7 @@ import logging
 from gettext import gettext as _
 
 from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -13,7 +14,9 @@ from django.core.cache import cache
 from django.contrib.auth import authenticate
 from rest_framework import exceptions
 from core.apps import CoreConfig
-from core.models import User, InteractiveUser, Officer, UserRole
+from core.models import User, InteractiveUser, Officer, UserRole, UserBusinessAccess
+from core.models.user_business_access import resolve_business_content_type
+from core.uba_link_types import is_valid_for
 from core.validation.obligatoryFieldValidation import validate_payload_for_obligatory_fields
 
 from program import models as program_models
@@ -214,7 +217,177 @@ def create_or_update_claim_admin(user_id, data, audit_user_id, connected):
     return claim_admin, created
 
 
-def create_or_update_core_user(user_uuid, username, i_user=None, t_user=None, officer=None, claim_admin=None):
+def _business_object_pk(model_label, object_ref):
+    """
+    Resolve a business object reference (pk or uuid) to its primary key, or None when it
+    does not designate an existing row.
+    """
+    from core.models.user_business_access import resolve_business_content_type
+
+    content_type = resolve_business_content_type(model_label)
+    model = content_type.model_class() if content_type else None
+    if model is None:
+        logger.warning("Unknown business object model '%s'", model_label)
+        return None
+    queryset = model.objects.all()
+    if any(f.name == "uuid" for f in model._meta.fields):
+        pk = queryset.filter(uuid=object_ref).values_list("pk", flat=True).first()
+        if pk is not None:
+            return pk
+    try:
+        return queryset.filter(pk=object_ref).values_list("pk", flat=True).first()
+    except (ValidationError, ValueError, TypeError):
+        return None
+
+
+def create_or_update_user_business_accesses(core_user, business_accesses, audit_user=None):
+    """
+    Replace the whole set of UBA links of `core_user` with `business_accesses`, a list of
+    `{"link_type", "business_object_model", "object_id"}`. Links left out are soft deleted
+    so their history survives.
+
+    `business_accesses` None means "leave the links alone", an empty list means "drop them
+    all", the same convention the right bags use.
+    """
+    if business_accesses is None:
+        return list(UserBusinessAccess.objects.filter(user=core_user, active=True))
+
+    wanted = {}
+    for entry in business_accesses:
+        model_label = entry.get("business_object_model")
+        link_type = (entry.get("link_type") or "").strip()
+        if not is_valid_for(link_type, model_label):
+            raise ValidationError(
+                f"'{link_type}' is not a UBA link type registered for {model_label}")
+        content_type = resolve_business_content_type(model_label)
+        object_pk = _business_object_pk(model_label, entry.get("object_id"))
+        if content_type is None or object_pk is None:
+            raise ValidationError(
+                f"No {model_label} matching '{entry.get('object_id')}'")
+        wanted[(link_type, content_type.id, str(object_pk))] = None
+
+    kept = []
+    for business_access in UserBusinessAccess.objects.filter(user=core_user, active=True):
+        key = (business_access.link_type, business_access.content_type_id, business_access.object_id)
+        if key in wanted and wanted[key] is None:
+            wanted[key] = business_access
+            kept.append(business_access)
+        else:
+            # dropped by this call, or a duplicate of a link we already kept
+            business_access.delete(user=audit_user)
+
+    for (link_type, content_type_id, object_id), existing in wanted.items():
+        if existing is not None:
+            continue
+        business_access = UserBusinessAccess(
+            user=core_user,
+            link_type=link_type,
+            content_type_id=content_type_id,
+            object_id=object_id,
+        )
+        business_access.save(user=audit_user)
+        kept.append(business_access)
+    return kept
+
+
+def business_access_object_ids(core_user, link_type, model_label):
+    """Primary keys of the business objects `core_user` is linked to under `link_type`."""
+    content_type = resolve_business_content_type(model_label)
+    if content_type is None:
+        return []
+    return [
+        int(object_id) for object_id in UserBusinessAccess.objects.filter(
+            user=core_user, link_type=link_type, content_type=content_type, active=True
+        ).values_list("object_id", flat=True)
+        if str(object_id).isdigit()
+    ]
+
+
+def align_claim_admin_with_business_access(core_user, audit_user_id=None):
+    """
+    Derive the claim admin entry from the CLAIM_ADMIN links, the dedicated ClaimAdmin table
+    staying in place next to UBA.
+
+    No link: nothing to derive, the entry is left untouched. No claim admin yet: create one
+    on the first linked HF. A claim admin already there: keep its HF when it is one of the
+    linked ones, otherwise move it to the first linked one.
+
+    Never assigns a role. Attaching an HF must not pull the standard claim admin role onto
+    the user, that coupling is what UBA exists to remove.
+    """
+    from core.apps import CLAIM_ADMIN_UBA_LINK_TYPE, HEALTH_FACILITY_MODEL
+
+    hf_ids = business_access_object_ids(core_user, CLAIM_ADMIN_UBA_LINK_TYPE, HEALTH_FACILITY_MODEL)
+    if not hf_ids:
+        return None
+
+    claim_admin = core_user.claim_admin
+    if claim_admin is not None and claim_admin.health_facility_id in hf_ids:
+        return claim_admin
+
+    if claim_admin is None:
+        claim_admin_class = apps.get_model("claim", "ClaimAdmin")
+        i_user = core_user.i_user
+        claim_admin = claim_admin_class(
+            code=core_user.username,
+            last_name=i_user.last_name if i_user else core_user.username,
+            other_names=i_user.other_names if i_user else "",
+            email_id=i_user.email if i_user else None,
+            phone=i_user.phone if i_user else None,
+            has_login=True,
+            audit_user_id=audit_user_id,
+        )
+    else:
+        claim_admin.save_history()
+    claim_admin.health_facility_id = hf_ids[0]
+    claim_admin.save()
+    if core_user.claim_admin_id != claim_admin.id:
+        core_user.claim_admin = claim_admin
+        core_user.save()
+    return claim_admin
+
+
+def align_officer_villages_with_business_access(core_user, audit_user_id=None):
+    """
+    Derive the enrolment officer villages from the ENROLMENT links, the dedicated
+    OfficerVillage table staying in place next to UBA.
+
+    Mirrors `align_claim_admin_with_business_access`: no link leaves the officer untouched,
+    otherwise the officer villages are aligned on the linked ones. Never assigns a role.
+    """
+    from core.apps import ENROLMENT_UBA_LINK_TYPE, VILLAGE_MODEL
+
+    village_ids = business_access_object_ids(core_user, ENROLMENT_UBA_LINK_TYPE, VILLAGE_MODEL)
+    if not village_ids:
+        return None
+
+    officer = core_user.officer
+    if officer is None:
+        i_user = core_user.i_user
+        officer = Officer(
+            code=core_user.username,
+            last_name=i_user.last_name if i_user else core_user.username,
+            other_names=i_user.other_names if i_user else "",
+            email=i_user.email if i_user else None,
+            phone=i_user.phone if i_user else None,
+            location_id=village_ids[0],
+            has_login=True,
+            audit_user_id=audit_user_id,
+        )
+        officer.save()
+        core_user.officer = officer
+        core_user.save()
+    elif officer.location_id not in village_ids:
+        officer.save_history()
+        officer.location_id = village_ids[0]
+        officer.save()
+
+    create_or_update_officer_villages(officer, village_ids, audit_user_id)
+    return officer
+
+
+def create_or_update_core_user(user_uuid, username, i_user=None, t_user=None, officer=None, claim_admin=None,
+                               audit_user=None, audit_user_id=None, business_accesses=None):
     if user_uuid:
         # This intentionally fails if the provided uuid doesn't exist as we don't want clients to set it
         user = User.objects.get(id=user_uuid)
@@ -241,6 +414,11 @@ def create_or_update_core_user(user_uuid, username, i_user=None, t_user=None, of
     if claim_admin:
         user.claim_admin = claim_admin
     user.save()
+    # UBA is the input: the links are stored first, then the dedicated claim admin and
+    # enrolment officer entries are derived from them. Both tables keep working as before.
+    create_or_update_user_business_accesses(user, business_accesses, audit_user=audit_user)
+    align_claim_admin_with_business_access(user, audit_user_id=audit_user_id)
+    align_officer_villages_with_business_access(user, audit_user_id=audit_user_id)
     return user, created
 
 

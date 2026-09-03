@@ -8,7 +8,7 @@ from django.db import models
 from django.db.models import Q
 from graphql import ResolveInfo
 
-from ..uba_link_types import is_valid_for, normalize_link_types
+from ..uba_link_types import get_uba_link_type, is_valid_for, normalize_link_types
 from .openimis_model import OpenIMISBusinessModel
 
 logger = logging.getLogger(__name__)
@@ -52,12 +52,40 @@ def resolve_business_object_ids(content_type, object_ref):
     return object_ids
 
 
+def business_map_content_types(model_label, link_types):
+    """
+    The content types a business map is matched on: the one it names, or, when it names
+    none, the models the credentials it demands are declared on - the registry
+    (`core.uba_link_types`) being what knows them, so a caller only has to name the
+    credential. `[None]` when neither says anything, the object reference and the
+    credential being the whole demand then.
+    """
+    if model_label:
+        content_type = resolve_business_content_type(model_label)
+        return [content_type] if content_type is not None else []
+    labels = []
+    for code in link_types:
+        link_type = get_uba_link_type(code)
+        for model in (link_type.models if link_type else ()):
+            if model not in labels:
+                labels.append(model)
+    if not labels:
+        # a credential usable on any model is matched on the reference alone; a map
+        # naming neither a model nor a credential demands nothing and matches nothing
+        return [None] if link_types else []
+    return [ct for ct in (resolve_business_content_type(label) for label in labels) if ct is not None]
+
+
 def normalize_access_requirements(access_requirements):
     """
     Normalize the business map(s) passed to `has_perms`. Accepts a single map or a
     list of maps, a map being `[<model label>, <object reference>]` optionally followed
     by the link type(s) it demands: `['location.healthfacility', hf_uuid, 'ACCOUNTANT']`
     or `['location.healthfacility', hf_uuid, ['ACCOUNTANT', 'HF_CLAIM_ADMIN']]`.
+
+    The model label may be None when the map demands a credential: the registry already
+    says which models that credential is declared on, so `[None, hf_uuid, 'CLAIM_ADMIN']`
+    asks the same question without the caller repeating the model.
 
     Returns a list of `(model_label, object_reference, link_types)`, `link_types` being
     an empty list when the map accepts any credential on the instance.
@@ -67,7 +95,8 @@ def normalize_access_requirements(access_requirements):
     if not isinstance(access_requirements, (list, tuple)):
         logger.warning("Ignoring invalid access requirements %s", access_requirements)
         return []
-    if isinstance(access_requirements[0], str):
+    # a single map starts with its model label, a list of maps with a map
+    if access_requirements[0] is None or isinstance(access_requirements[0], str):
         access_requirements = [access_requirements]
     business_maps = []
     for business_map in access_requirements:
@@ -155,18 +184,17 @@ class UserBusinessAccess(OpenIMISBusinessModel):
         """
         Does `user` hold a valid link on one of the business objects of `business_maps`,
         under one of the link types the map demands ? A map naming no link type is
-        satisfied by any credential on that instance.
+        satisfied by any credential on that instance, and a map naming no model is
+        matched on the models its credentials are registered on.
         """
         for model_label, object_ref, link_types in business_maps:
-            content_type = resolve_business_content_type(model_label)
-            if content_type is None:
-                continue
             unknown = [code for code in link_types if not is_valid_for(code, model_label)]
             if unknown:
                 logger.warning("Business map %s demands unregistered link type(s) %s", model_label, unknown)
-            object_ids = resolve_business_object_ids(content_type, object_ref)
-            if cls.filter_for_user(user, content_type, object_ids, link_types, now=now).exists():
-                return True
+            for content_type in business_map_content_types(model_label, link_types):
+                object_ids = resolve_business_object_ids(content_type, object_ref)
+                if cls.filter_for_user(user, content_type, object_ids, link_types, now=now).exists():
+                    return True
         return False
 
     @classmethod
@@ -180,6 +208,12 @@ class UserBusinessAccess(OpenIMISBusinessModel):
     class Meta:
         verbose_name = "User Business Access"
         verbose_name_plural = "User Business Accesses"
+        # business actions beyond django's default add/change/delete/view, so
+        # core.apps.DJANGO_PERMS can name them and an admin can grant them
+        permissions = [
+            ("activate_userbusinessaccess", "Can activate a user business access"),
+            ("deactivate_userbusinessaccess", "Can deactivate a user business access"),
+        ]
         indexes = [
             models.Index(fields=['content_type', 'object_id']),
             models.Index(fields=['user', 'content_type', 'object_id']),

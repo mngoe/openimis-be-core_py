@@ -1,7 +1,8 @@
 import graphene
 import location.gql_queries
 from core import ExtendedConnection, filter_validity
-from core.models import Officer, Role, RoleRight, UserRole, User, InteractiveUser, UserMutation, Language
+from core.models import (Officer, Role, RoleRight, UserRole, User, InteractiveUser, UserMutation, Language,
+                         UserBusinessAccess)
 from graphene_django import DjangoObjectType
 from location.models import HealthFacility
 from .apps import CoreConfig
@@ -240,3 +241,61 @@ class ValidationMessageGQLType(graphene.ObjectType):
     error_code = graphene.Int()
     error_message = graphene.String()
 
+
+
+class UbaLinkTypeGQLType(graphene.ObjectType):
+    """
+    A credential a user may hold on a business object. Not an openIMIS role: the codes are
+    declared by the modules through `core.uba_link_types`, so a client can offer a picker
+    without knowing the roles of the deployment.
+    """
+    code = graphene.String(description="Stable code, what UserBusinessAccess.link_type stores")
+    label = graphene.String(description="Human readable label")
+    models = graphene.List(
+        graphene.String,
+        description="'<app_label>.<model>' labels the credential may be used on, empty meaning any",
+    )
+    params = graphene.JSONString(
+        description="What the declaring module said about the credential beyond its models, "
+                    "notably how it sits in the location tree (see core.uba_link_types)",
+    )
+
+    def resolve_params(self, info):
+        return self.params or {}
+
+
+class UserBusinessAccessGQLType(DjangoObjectType):
+    """A user linked to one business object under one credential."""
+    business_object_model = graphene.String(
+        description="'<app_label>.<model>' of the linked business object")
+    link_type_label = graphene.String(description="Label of the link type, from the registry")
+
+    class Meta:
+        model = UserBusinessAccess
+        interfaces = (graphene.relay.Node,)
+        filter_fields = {
+            "id": ["exact"],
+            "uuid": ["exact"],
+            "link_type": ["exact", "iexact", "icontains", "in"],
+            "object_id": ["exact", "in"],
+            "active": ["exact"],
+            "date_valid_from": ["exact", "lt", "lte", "gt", "gte"],
+            "date_valid_to": ["exact", "lt", "lte", "gt", "gte", "isnull"],
+            "user__id": ["exact"],
+            "user__username": ["exact", "icontains"],
+            "content_type__app_label": ["exact"],
+            "content_type__model": ["exact", "iexact"],
+        }
+        connection_class = ExtendedConnection
+
+    def resolve_business_object_model(self, info):
+        return self.model_label
+
+    def resolve_link_type_label(self, info):
+        from core.uba_link_types import get_uba_link_type
+        link_type = get_uba_link_type(self.link_type)
+        return link_type.label if link_type else self.link_type
+
+    @classmethod
+    def get_queryset(cls, queryset, info):
+        return UserBusinessAccess.get_queryset(queryset, info)

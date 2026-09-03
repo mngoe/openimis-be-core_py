@@ -45,7 +45,8 @@ from .apps import CoreConfig
 from .custom_filters import CustomFilterWizardStorage
 from .gql_queries import *
 from .utils import flatten_dict
-from .models import ModuleConfiguration, FieldControl, MutationLog, Language, RoleMutation, UserMutation
+from .models import (ModuleConfiguration, FieldControl, MutationLog, Language, RoleMutation, UserMutation,
+                     UserBusinessAccess)
 from .services.roleServices import check_role_unique_name
 from .services.userServices import check_user_unique_email
 from .receivers import clear_role_rights_cache
@@ -506,6 +507,20 @@ class Query(graphene.ObjectType):
         RoleRightGQLType, orderBy=graphene.List(of_type=graphene.String), validity=graphene.Date(), max_limit=None
     )
 
+    user_business_access = OrderedDjangoFilterConnectionField(
+        UserBusinessAccessGQLType,
+        orderBy=graphene.List(of_type=graphene.String),
+        client_mutation_id=graphene.String(),
+    )
+
+    uba_link_types = graphene.List(
+        UbaLinkTypeGQLType,
+        business_object_model=graphene.String(
+            required=False,
+            description="Restrict to the credentials usable on that '<app_label>.<model>'"),
+        description="The credentials a user may hold on a business object, from the module registry",
+    )
+
     interactiveUsers = OrderedDjangoFilterConnectionField(
         InteractiveUserGQLType, orderBy=graphene.List(of_type=graphene.String), validity=graphene.Date(),
         show_history=graphene.Boolean(),
@@ -701,6 +716,34 @@ class Query(graphene.ObjectType):
         if info.context.user.is_authenticated:
             return info.context.user
         return None
+
+    def resolve_user_business_access(self, info, **kwargs):
+        """
+        The links of everybody, or one's own.
+
+        The query perms gate the links of *other* users, which is an administration act.
+        Reading the credentials one holds is not: a client cannot tell what it may offer
+        without them, and they are the user's own data. So a user without the perms gets a
+        read only view of their own valid links instead of a denial. Creating, updating or
+        removing a link stays behind the mutation perms either way.
+        """
+        if not info.context.user.is_authenticated:
+            raise PermissionDenied(_("unauthorized"))
+        if info.context.user.has_perms(CoreConfig.gql_query_user_business_access_perms):
+            return gql_optimizer.query(UserBusinessAccess.objects.all(), info)
+        # only the links that actually count: what the client sees is what grants
+        return gql_optimizer.query(UserBusinessAccess.filter_for_user(info.context.user), info)
+
+    def resolve_uba_link_types(self, info, business_object_model=None, **kwargs):
+        """
+        The registry itself: the codes the modules declared, carrying no data of anybody.
+        Any authenticated user may read it, a client needs it to label the credentials it
+        displays and to offer the ones a business object accepts.
+        """
+        if not info.context.user.is_authenticated:
+            raise PermissionDenied(_("unauthorized"))
+        from core.uba_link_types import get_uba_link_types
+        return get_uba_link_types(business_object_model)
 
     def resolve_user_obligatory_fields(self, info):
         if info.context.user.is_authenticated:
@@ -1282,6 +1325,16 @@ class DuplicateRoleMutation(OpenIMISMutation):
                 }]
 
 
+class UserBusinessAccessInputType(graphene.InputObjectType):
+    """One "user acts under that credential on that business object" link."""
+    link_type = graphene.String(
+        required=True, description="Registered credential code, see the ubaLinkTypes query")
+    business_object_model = graphene.String(
+        required=True, description="'<app_label>.<model>' of the business object")
+    object_id = graphene.String(
+        required=True, description="Primary key or uuid of the business object")
+
+
 class UserBase:
     uuid = graphene.String(
         required=False,
@@ -1318,7 +1371,17 @@ class UserBase:
     )
     village_ids = graphene.List(graphene.Int, required=False)
 
-    user_types = graphene.List(UserTypeEnum, required=True)
+    business_accesses = graphene.List(
+        UserBusinessAccessInputType,
+        required=False,
+        description="The credentials the user holds on business objects. Replaces the whole "
+                    "set: the links left out are closed. The claim admin and enrolment "
+                    "officer entries are derived from it.",
+    )
+
+    # Kept for backward compatibility only. The claim admin and enrolment officer entries
+    # are now derived from `business_accesses`, not from the declared user types.
+    user_types = graphene.List(UserTypeEnum, required=False)
 
 
 class CreateUserMutation(OpenIMISMutation):
@@ -1450,23 +1513,32 @@ def update_or_create_user(data, user):
         data.pop('client_mutation_label')
     user_uuid = data.pop('uuid') if 'uuid' in data else None
 
-    if UT_INTERACTIVE in data["user_types"]:
+    # user_types is legacy: what gets created no longer depends on it. An interactive user
+    # is built whenever roles are given, and the claim admin / enrolment officer entries are
+    # derived from the CLAIM_ADMIN / ENROLMENT business accesses by the service.
+    user_types = data.get("user_types") or []
+    is_interactive = UT_INTERACTIVE in user_types or bool(data.get("roles"))
+    if is_interactive:
         i_user, i_user_created = create_or_update_interactive_user(
-            user_uuid, data, user.id_for_audit, len(data["user_types"]) > 1)
+            user_uuid, data, user.id_for_audit, len(user_types) > 1)
     else:
         i_user, i_user_created = None, False
-    if UT_OFFICER in data["user_types"]:
+    # the explicit officer / claim admin payloads still win when they are sent, the business
+    # accesses only fill in what the client did not spell out
+    if UT_OFFICER in user_types:
         officer, officer_created = create_or_update_officer(
-            user_uuid, data, user.id_for_audit, UT_INTERACTIVE in data["user_types"])
+            user_uuid, data, user.id_for_audit, is_interactive)
     else:
         officer, officer_created = None, False
-    if UT_CLAIM_ADMIN in data["user_types"]:
+    if UT_CLAIM_ADMIN in user_types:
         claim_admin, claim_admin_created = create_or_update_claim_admin(
-            user_uuid, data, user.id_for_audit, UT_INTERACTIVE in data["user_types"])
+            user_uuid, data, user.id_for_audit, is_interactive)
     else:
         claim_admin, claim_admin_created = None, False
     core_user, core_user_created = create_or_update_core_user(
-        user_uuid=user_uuid, username=username, i_user=i_user, officer=officer, claim_admin=claim_admin)
+        user_uuid=user_uuid, username=username, i_user=i_user, officer=officer, claim_admin=claim_admin,
+        audit_user=user, audit_user_id=user.id_for_audit,
+        business_accesses=data.get("business_accesses"))
 
     if client_mutation_id:
         UserMutation.object_mutated(user, core_user=core_user, client_mutation_id=client_mutation_id)
