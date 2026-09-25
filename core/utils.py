@@ -227,22 +227,29 @@ class CachedManager(models.Manager):
         Overrides get() to use cache for single exact lookups on pk, id, or uuid.
         Returns a single instance or raises DoesNotExist/MultipleObjectsReturned.
         """
-        if not getattr(self.model, 'USE_CACHE', False):
+        if not getattr(self.model, "USE_CACHE", False):
             return super().get(*args, **kwargs)
-        is_simple, key, value, field, lookup = self._is_simple_lookup(args, kwargs)
-    
 
-        if is_simple and lookup == 'exact':
+        is_simple, key, value, field, lookup = self._is_simple_lookup(args, kwargs)
+
+        if is_simple and lookup == "exact":
             # Try cache lookup for exact queries
             cache_result = self._handle_cache_lookup(field, value, lookup)
             if cache_result is not None:
                 cached_qs = cache_result
-                logger.debug("Cache hit for get() with key: %s", get_cache_key(self.model, self._normalize_value(value)))
-                return cached_qs.first()  # Use first() to get single instance
-                
-        # Fallback to default get() for non-simple queries or cache miss
+
+                objects = list(cached_qs)
+
+                for obj in objects:
+                    if str(obj.uuid) == str(value):
+                        logger.debug(
+                            "Cache hit for get() with key: %s",
+                            get_cache_key(self.model, self._normalize_value(value))
+                        )
+                        return obj
+
         instance = super().get(*args, **kwargs)
-        
+
         # Cache the instance for future lookups
         instance.update_cache()
         return instance
