@@ -20,7 +20,9 @@ from django.dispatch import receiver
 
 from ..fields import DateTimeField
 from ..utils import filter_validity
-
+from django.core.cache import caches
+from django.conf import settings
+cache = caches["default"]
 
 logger = logging.getLogger(__name__)
 
@@ -68,11 +70,21 @@ class ModuleConfiguration(UUIDModel):
     )
 
     @classmethod
-    def get_or_default(cls, module, default, layer='be'):
-        if bool(os.environ.get('NO_DATABASE', False)):
-            logger.info('env NO_DATABASE set to True: ModuleConfiguration not loaded from db!')
+    def get_or_default(cls, module, default, layer="be"):
+        if bool(os.environ.get("NO_DATABASE", False)):
+            logger.info(
+                "env NO_DATABASE set to True: ModuleConfiguration not loaded from db!"
+            )
             return default
 
+        # 1. Check inside cache first
+        cache_key = f"module_config:{layer}:{module}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            logger.info("ModuleConfiguration cache hit for %s/%s", layer, module)
+            return cached
+
+        logger.info("Getting configuration from database")
         try:
             now = py_datetime.now()  # can't use core config here...
             qs = cls.objects.filter(
@@ -82,14 +94,33 @@ class ModuleConfiguration(UUIDModel):
             ).first()
             if qs:
                 db_configuration = qs._cfg
-                return {**default, **db_configuration}
+                result = {**default, **db_configuration}
             else:
-                logger.info('No %s configuration, using default!' % module)
-                return default
+                logger.info("No %s configuration, using default!" % module)
+                print("No %s configuration, using default!" % module)
+                result = default
+
+            # 2. Set data inside cache
+            cache.set(cache_key, result, timeout=settings.CACHE_OBJECT_TTL)
+            return result
+
         except Exception:
-            logger.error('Failed to load %s configuration, using default!\n%s: %s' % (
-                module, sys.exc_info()[0].__name__, sys.exc_info()[1]))
+            logger.error(
+                "Failed to load %s configuration, using default!\n%s: %s"
+                % (module, sys.exc_info()[0].__name__, sys.exc_info()[1])
+            )
             return default
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        cache_key = f"module_config:{self.layer}:{self.module}"
+        cache.delete(cache_key)
+        logger.debug("Cache invalidé pour ModuleConfiguration %s/%s", self.layer, self.module)
+
+    def delete(self, *args, **kwargs):
+        cache_key = f"module_config:{self.layer}:{self.module}"
+        cache.delete(cache_key)
+        super().delete(*args, **kwargs)
 
     @cached_property
     def _cfg(self):
