@@ -2,6 +2,7 @@ import sys
 import os
 import importlib
 import logging
+from functools import lru_cache
 from django.apps import AppConfig
 from django.conf import settings
 
@@ -100,6 +101,21 @@ def perms(entity, *actions):
     return [str(right_id) for _, right_id in _perm_entries(entity, actions)]
 
 
+def require(user, entity, *actions, match="any"):
+    """
+    Whether `user` holds the rights for those actions - the call site form of `perms`.
+
+    `match="any"` (the default, matching `has_perms`) passes on any one of the actions;
+    `match="all"` demands every one. Keeps an OR rule to a single call instead of a
+    chain of `has_perms`.
+    """
+    if match not in ("any", "all"):
+        raise ValueError("match must be 'any' or 'all'")
+    return user.has_perms(
+        perms(entity, *actions), list_evaluation_or=(match == "any")
+    )
+
+
 def django_perms(entity, *actions):
     """
     The django permission names of those actions. Declared but **not** enforced yet: nothing
@@ -109,12 +125,45 @@ def django_perms(entity, *actions):
     return [perm for perm, _ in _perm_entries(entity, actions)]
 
 
+# The `_perms` config keys, each mapped to the entity/action it carries. Single source
+# for both the DEFAULT_CFG entries and the `_configure_permissions` assignments below,
+# so a right cannot be declared in one and forgotten in the other - a key present in
+# DEFAULT_CFG without a matching attribute on CoreConfig is silently never loaded, and
+# reading it then raises AttributeError.
+_PERM_CFG = {
+    "gql_query_users_perms": ("user", "query"),
+    "gql_mutation_create_users_perms": ("user", "create"),
+    "gql_mutation_update_users_perms": ("user", "update"),
+    "gql_mutation_delete_users_perms": ("user", "delete"),
+    "gql_query_user_business_access_perms": ("userBusinessAccess", "query"),
+    "gql_mutation_create_user_business_access_perms": ("userBusinessAccess", "create"),
+    "gql_mutation_update_user_business_access_perms": ("userBusinessAccess", "update"),
+    "gql_mutation_delete_user_business_access_perms": ("userBusinessAccess", "delete"),
+    "gql_mutation_activate_user_business_access_perms": ("userBusinessAccess", "activate"),
+    "gql_mutation_deactivate_user_business_access_perms": ("userBusinessAccess", "deactivate"),
+    "gql_query_roles_perms": ("role", "query"),
+    "gql_mutation_create_roles_perms": ("role", "create"),
+    "gql_mutation_update_roles_perms": ("role", "update"),
+    "gql_mutation_replace_roles_perms": ("role", "replace"),
+    "gql_mutation_duplicate_roles_perms": ("role", "duplicate"),
+    "gql_mutation_delete_roles_perms": ("role", "delete"),
+    "gql_query_enrolment_officers_perms": ("enrolmentOfficer", "query"),
+    "gql_mutation_create_enrolment_officers_perms": ("enrolmentOfficer", "create"),
+    "gql_mutation_update_enrolment_officers_perms": ("enrolmentOfficer", "update"),
+    "gql_mutation_delete_enrolment_officers_perms": ("enrolmentOfficer", "delete"),
+    "gql_query_claim_administrator_perms": ("claimAdministrator", "query"),
+    "gql_mutation_create_claim_administrator_perms": ("claimAdministrator", "create"),
+    "gql_mutation_update_claim_administrator_perms": ("claimAdministrator", "update"),
+    "gql_mutation_delete_claim_administrator_perms": ("claimAdministrator", "delete"),
+}
+
+
 this = sys.modules[MODULE_NAME]
 
 DEFAULT_CFG = {
     "username_code_length": "8",  # cannot be bigger than 50 unless modified length limit
     "username_changeable": True,
-    "auto_provisioning_user_group": "user",
+    "auto_provisioning_user_group": None,
     "calendar_package": "core",
     "calendar_module": ".calendars.ad_calendar",
     "datetime_package": "core",
@@ -126,33 +175,13 @@ DEFAULT_CFG = {
     "async_mutations": "True" if os.environ.get("ASYNC", os.environ.get("MODE", "PROD")).lower() == "prod" else "False",
     "password_reset_template": "password_reset.txt",
     "currency": "$",
-    "gql_query_users_perms": perms("user", "query"),
-    "gql_mutation_create_users_perms": perms("user", "create"),
-    "gql_mutation_update_users_perms": perms("user", "update"),
-    "gql_mutation_delete_users_perms": perms("user", "delete"),
-    "gql_query_user_business_access_perms": perms("userBusinessAccess", "query"),
-    "gql_mutation_create_user_business_access_perms": perms("userBusinessAccess", "create"),
-    "gql_mutation_update_user_business_access_perms": perms("userBusinessAccess", "update"),
-    "gql_mutation_delete_user_business_access_perms": perms("userBusinessAccess", "delete"),
-    "gql_mutation_activate_user_business_access_perms": perms("userBusinessAccess", "activate"),
-    "gql_mutation_deactivate_user_business_access_perms": perms("userBusinessAccess", "deactivate"),
-    "gql_query_roles_perms": perms("role", "query"),
-    "gql_mutation_create_roles_perms": perms("role", "create"),
-    "gql_mutation_update_roles_perms": perms("role", "update"),
-    "gql_mutation_replace_roles_perms": perms("role", "replace"),
-    "gql_mutation_duplicate_roles_perms": perms("role", "duplicate"),
-    "gql_mutation_delete_roles_perms": perms("role", "delete"),
+    # Every `_perms` entry, derived from _PERM_CFG so each right id lives in exactly
+    # one place (DJANGO_PERMS). An unknown entity or action raises here, at import
+    # time, rather than silently yielding [] - which `has_perms` treats as granted.
+    **{key: perms(*entity_action) for key, entity_action in _PERM_CFG.items()},
     # TODO consider moving that roles related to ClaimAdmin and EnrolmentOfficer
     #  into modules related to that type of user for example
     #  EnrolmentOfficer -> policy module, ClaimAdmin -> claim module etc
-    "gql_query_enrolment_officers_perms": perms("enrolmentOfficer", "query"),
-    "gql_mutation_create_enrolment_officers_perms": perms("enrolmentOfficer", "create"),
-    "gql_mutation_update_enrolment_officers_perms": perms("enrolmentOfficer", "update"),
-    "gql_mutation_delete_enrolment_officers_perms": perms("enrolmentOfficer", "delete"),
-    "gql_query_claim_administrator_perms": perms("claimAdministrator", "query"),
-    "gql_mutation_create_claim_administrator_perms": perms("claimAdministrator", "create"),
-    "gql_mutation_update_claim_administrator_perms": perms("claimAdministrator", "update"),
-    "gql_mutation_delete_claim_administrator_perms": perms("claimAdministrator", "delete"),
     "fields_controls_user": {},
     "fields_controls_eo": {},
     "is_valid_health_facility_contract_required": False,
@@ -239,6 +268,8 @@ class CoreConfig(AppConfig):
             logger.info('env NO_DATABASE set to True: no user auto provisioning possible!')
             return
         group = cfg["auto_provisioning_user_group"]
+        if not group:
+            return
         this.auto_provisioning_user_group = group
         try:
             from .models import Group
@@ -258,36 +289,23 @@ class CoreConfig(AppConfig):
         this.async_mutations = True if cfg["async_mutations"] is None else cfg["async_mutations"].lower() == "true"
 
     def _configure_permissions(self, cfg):
-        CoreConfig.gql_query_user_business_access_perms = cfg["gql_query_user_business_access_perms"]
-        CoreConfig.gql_mutation_create_user_business_access_perms = \
-            cfg["gql_mutation_create_user_business_access_perms"]
-        CoreConfig.gql_mutation_update_user_business_access_perms = \
-            cfg["gql_mutation_update_user_business_access_perms"]
-        CoreConfig.gql_mutation_delete_user_business_access_perms = \
-            cfg["gql_mutation_delete_user_business_access_perms"]
-        CoreConfig.gql_mutation_activate_user_business_access_perms = \
-            cfg["gql_mutation_activate_user_business_access_perms"]
-        CoreConfig.gql_mutation_deactivate_user_business_access_perms = \
-            cfg["gql_mutation_deactivate_user_business_access_perms"]
-        CoreConfig.gql_query_roles_perms = cfg["gql_query_roles_perms"]
-        CoreConfig.gql_mutation_create_roles_perms = cfg["gql_mutation_create_roles_perms"]
-        CoreConfig.gql_mutation_update_roles_perms = cfg["gql_mutation_update_roles_perms"]
-        CoreConfig.gql_mutation_replace_roles_perms = cfg["gql_mutation_replace_roles_perms"]
-        CoreConfig.gql_mutation_duplicate_roles_perms = cfg["gql_mutation_duplicate_roles_perms"]
-        CoreConfig.gql_mutation_delete_roles_perms = cfg["gql_mutation_delete_roles_perms"]
-        CoreConfig.gql_query_users_perms = cfg["gql_query_users_perms"]
-        CoreConfig.gql_mutation_create_users_perms = cfg["gql_mutation_create_users_perms"]
-        CoreConfig.gql_mutation_update_users_perms = cfg["gql_mutation_update_users_perms"]
-        CoreConfig.gql_mutation_delete_users_perms = cfg["gql_mutation_delete_users_perms"]
-        CoreConfig.gql_query_enrolment_officers_perms = cfg["gql_query_enrolment_officers_perms"]
-        CoreConfig.gql_mutation_create_enrolment_officers_perms = cfg["gql_mutation_create_enrolment_officers_perms"]
-        CoreConfig.gql_mutation_update_enrolment_officers_perms = cfg["gql_mutation_update_enrolment_officers_perms"]
-        CoreConfig.gql_mutation_delete_enrolment_officers_perms = cfg["gql_mutation_delete_enrolment_officers_perms"]
-        CoreConfig.gql_query_claim_administrator_perms = cfg["gql_query_claim_administrator_perms"]
-        CoreConfig.gql_mutation_create_claim_administrator_perms = cfg["gql_mutation_create_claim_administrator_perms"]
-        CoreConfig.gql_mutation_update_claim_administrator_perms = cfg["gql_mutation_update_claim_administrator_perms"]
-        CoreConfig.gql_mutation_delete_claim_administrator_perms = cfg["gql_mutation_delete_claim_administrator_perms"]
-        CoreConfig.gql_mutation_delete_claim_administrator_perms = cfg["gql_mutation_delete_claim_administrator_perms"]
+        # Driven by _PERM_CFG rather than one assignment per right: adding a right to
+        # DJANGO_PERMS + _PERM_CFG is enough for it to be read from config, and a key
+        # can no longer be declared in DEFAULT_CFG yet never reach CoreConfig. This
+        # also drops a duplicated delete_claim_administrator assignment.
+        for key in _PERM_CFG:
+            value = cfg[key]
+            if not value:
+                # `has_perms([])` returns True: an empty right list grants the action
+                # to everyone, authenticated or not. Almost never intended, and a
+                # silent one is how queries end up effectively public.
+                logger.warning(
+                    "core: %s resolved to an empty right list - `has_perms` treats "
+                    "that as granted to everyone. Check the ModuleConfiguration "
+                    "override.",
+                    key,
+                )
+            setattr(CoreConfig, key, value)
 
         CoreConfig.fields_controls_user = cfg["fields_controls_user"]
         CoreConfig.fields_controls_eo = cfg["fields_controls_eo"]
@@ -323,6 +341,21 @@ class CoreConfig(AppConfig):
         # loads) which imports `<module>.receivers` itself, making this import a
         # duplicate registration risk. The receivers use an explicit `dispatch_uid`,
         # so a double load is currently idempotent.
+        # django.contrib.auth is earlier in INSTALLED_APPS, and Django keeps the command
+        # from the earliest app, so core's createsuperuser would lose. Prefer it: that
+        # command is what also creates the interactive user.
+        import django.core.management as management
+
+        _django_get_commands = management.get_commands.__wrapped__
+
+        @lru_cache(maxsize=None)
+        def get_commands():
+            commands = _django_get_commands()
+            commands["createsuperuser"] = "core"
+            return commands
+
+        management.get_commands = get_commands
+
         from core import receivers  # noqa: F401
 
         # The scheduler starts as soon as it gets a job, which could be before Django is ready, so we enable it here

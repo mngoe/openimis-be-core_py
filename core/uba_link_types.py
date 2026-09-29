@@ -54,6 +54,11 @@ _REGISTRY = {}
 
 MAX_CODE_LENGTH = 64
 
+# The wildcard a caller passes instead of enumerating the codes, "every registered link
+# type". Spelled as a code so that the selection stays a plain list of codes, whatever it
+# comes from - a call site, a configuration entry or a query string.
+ALL_UBA_LINK_TYPES = "ALL"
+
 
 def register_uba_link_type(code, label=None, models=(), params=None):
     """
@@ -128,13 +133,34 @@ def get_uba_link_type_param(code, name, default=None):
     return link_type.params.get(name, default) if link_type else default
 
 
-def get_location_aware_uba_link_types():
+def get_location_aware_uba_link_types(link_types=ALL_UBA_LINK_TYPES):
     """
     The link types that say how they relate to the location tree, i.e. the ones the
     location row filter can turn into a queryset filter. Sorted by code, like
     `get_uba_link_types`, so a filter is built in a stable order.
+
+    `link_types` selects among them: a single code, a list of codes, or
+    `ALL_UBA_LINK_TYPES` ("ALL", also honoured inside a list). None or an empty list
+    selects *nothing*, which is how the row filter says "this module is not governed by
+    any credential" - a caller asks for the credentials its own rows answer to, so that a
+    CLAIM_ADMIN link never shrinks what its holder may enrol.
+
+    The parameter defaults to "ALL" because a bare call is a listing of what the registry
+    holds; the row filter passes its own default, which is None.
+
+    A demanded code that is not registered is logged and dropped: it is a typo at the
+    call site, and dropping it can only widen the result, hence the warning.
     """
-    return [
+    wanted = normalize_link_types(link_types)
+    if not wanted:
+        return []
+    aware = [
         link_type for link_type in get_uba_link_types()
         if link_type.params.get("location_type") or link_type.params.get("location_field")
     ]
+    if ALL_UBA_LINK_TYPES in wanted:
+        return aware
+    unknown = [code for code in wanted if code not in _REGISTRY]
+    if unknown:
+        logger.warning("Unknown UBA link type(s) %s demanded, ignored", ", ".join(unknown))
+    return [link_type for link_type in aware if link_type.code in wanted]

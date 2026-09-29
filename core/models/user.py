@@ -21,6 +21,9 @@ from .versioned_model import *
 
 logger = logging.getLogger(__name__)
 
+# System number of the IMIS Administrator role. A user holding it passes every has_perms check.
+IMIS_ADMINISTRATOR_ROLE = 64
+
 
 class UserManager(BaseUserManager):
 
@@ -56,11 +59,6 @@ class UserManager(BaseUserManager):
         user = self._create_core_user(**kwargs)
         user.i_user = i_user
         user.save()
-        if core.auto_provisioning_user_group:
-            group = Group.objects.get(
-                name=core.auto_provisioning_user_group)
-            user_group = UserGroup(user=user, group=group)
-            user_group.save()
         return user, True
 
     def get_or_create(self, **kwargs):
