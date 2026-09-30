@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import uuid
 from datetime import timedelta, datetime as py_datetime
@@ -8,14 +9,14 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin, Group
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
-from django.db import models
+from django.db import models, transaction
 from django.utils.crypto import salted_hmac
 from graphql import ResolveInfo
 import core
 #from core.datetimes.ad_datetime import datetime as py_datetime
 from django.conf import settings
 
-from ..utils import filter_validity
+from ..utils import filter_validity, to_list_permissions
 from .base import *
 from .versioned_model import *
 
@@ -41,9 +42,68 @@ class UserManager(BaseUserManager):
         self._create_tech_user(username, email, password, **extra_fields)
 
     def create_superuser(self, username, password=None, email=None, **extra_fields):
-        extra_fields['is_staff'] = True
-        extra_fields['is_superuser'] = True
-        self._create_tech_user(username, email, password, **extra_fields)
+        # core.User has no password column, so Django's createsuperuser never puts the
+        # password in this call. The core command stashes it in the environment instead.
+        if not password:
+            password = os.environ.get("DJANGO_SUPERUSER_PASSWORD") or None
+        # A superuser is an interactive user holding the IMIS Administrator role, no
+        # technical user is involved: core_User has no is_superuser column to flag it on.
+        with transaction.atomic():
+            i_user = self._create_interactive_superuser(username, password, email)
+            user = self.filter(username=username).first() or User(username=username)
+            user.i_user = i_user
+            user.save()
+        return user
+
+    def _create_interactive_superuser(self, username, password, email=None):
+        """
+        The interactive user (tblUsers) the openIMIS UI logs in as, with the IMIS
+        Administrator role (is_system = 64) that makes it a superuser. The language and
+        the role are created here when the database does not already have them.
+        """
+        language = (
+            Language.objects.filter(code="en").first()
+            or Language.objects.order_by("sort_order", "code").first()
+        )
+        if language is None:
+            language = Language.objects.create(code="en", name="English", sort_order=1)
+
+        role = Role.objects.filter(
+            *filter_validity(), is_system=IMIS_ADMINISTRATOR_ROLE
+        ).first()
+        if role is None:
+            role = Role.objects.create(
+                name="IMIS Administrator",
+                is_system=IMIS_ADMINISTRATOR_ROLE,
+                is_blocked=False,
+                audit_user_id=-1,
+            )
+
+        i_user = InteractiveUser.objects.filter(
+            *filter_validity(), login_name=username
+        ).first()
+        if i_user is None:
+            i_user = InteractiveUser(
+                language=language,
+                last_name=username[:100],
+                other_names=username[:100],
+                login_name=username,
+                audit_user_id=-1,
+                role_id=role.id,
+                email=email,
+            )
+        elif not i_user.role_id:
+            i_user.role_id = role.id
+        if password:
+            i_user.set_password(password)
+        i_user.save()
+
+        if not UserRole.objects.filter(
+            *filter_validity(), user=i_user, role=role
+        ).exists():
+            UserRole.objects.create(user=i_user, role=role, audit_user_id=-1)
+        cache.delete('is_admin_' + str(i_user.id))
+        return i_user
 
     def auto_provision_user(self, **kwargs):
         # only auto-provision django user if registered as interactive user
@@ -231,13 +291,16 @@ class InteractiveUser(VersionedModel):
 
     @property
     def is_staff(self):
-        return False
+        return self.is_superuser
 
     @property
     def is_superuser(self):
-        if self.user and self.user.t_user:
-            return self.user.t_user.is_superuser
-        return False
+        # the IMIS Administrator role makes the superuser, a technical superuser
+        # bound to that interactive user (legacy createsuperuser) still counts
+        user = self.user
+        if user and user.t_user and user.t_user.is_superuser:
+            return True
+        return self.is_imis_admin
 
     @property
     def rights(self):
@@ -411,9 +474,9 @@ class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
 
     @property
     def is_superuser(self):
-        if self.user and self.user.t_user:
-            return self.user.t_user.is_superuser
-        return False
+        if self.t_user and self.t_user.is_superuser:
+            return True
+        return bool(self.i_user and self.i_user.is_superuser)
 
     @property
     def is_imis_admin(self):
