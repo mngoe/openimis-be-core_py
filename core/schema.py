@@ -997,6 +997,15 @@ class RoleBase:
     system_role_id = graphene.Int(required=False)
 
 
+def distinct_rights(rights_id):
+    """
+    Drop the duplicates of a right bag sent by the client (order kept): each right
+    is stored once per bag, see the (role, right_id, uba) unique constraint.
+    """
+    return None if rights_id is None else list(dict.fromkeys(rights_id))
+
+
+
 def update_or_create_role(data, user):
     client_mutation_id = data.get("client_mutation_id", None)
     # client_mutation_label = data.get("client_mutation_label", None)
@@ -1006,7 +1015,8 @@ def update_or_create_role(data, user):
     if "client_mutation_label" in data:
         data.pop('client_mutation_label')
     role_uuid = data.pop('uuid') if 'uuid' in data else None
-    rights_id = data.pop('rights_id') if "rights_id" in data else None
+    rights_id = distinct_rights(data.pop('rights_id', None))
+    uba_rights_id = distinct_rights(data.pop('uba_rights_id', None))
     if role_uuid:
         role = Role.objects.get(uuid=role_uuid)
         role.save_history()
@@ -1060,7 +1070,8 @@ def duplicate_role(data, user):
     if "client_mutation_label" in data:
         data.pop('client_mutation_label')
     role_uuid = data.pop('uuid') if 'uuid' in data else None
-    rights_id = data.pop('rights_id') if "rights_id" in data else None
+    rights_id = distinct_rights(data.pop('rights_id', None))
+    uba_rights_id = distinct_rights(data.pop('uba_rights_id', None))
     # get the current Role object to be duplicated
     role = Role.objects.get(uuid=role_uuid)
     # copy Role to be dupliacated
