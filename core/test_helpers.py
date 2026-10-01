@@ -1,4 +1,5 @@
 from core.models import Officer, InteractiveUser, User, TechnicalUser, filter_validity
+from core.models import Role, RoleRight, UserBusinessAccess
 from core.models.openimis_graphql_test_case import openIMISGraphQLTestCase
 from core.services.userServices import create_or_update_officer_villages
 from core.services import create_or_update_user_roles
@@ -41,6 +42,52 @@ def create_test_officer(valid=True, custom_props={}, villages = []):
     if eo:
         result = create_or_update_officer_villages(eo, [v.id for v in villages], 1)
         return eo
+
+def create_test_role(name="TestRole", rights=None, uba_rights=None, custom_props=None):
+    """
+    Create a role with its two right bags: `rights` are global (RoleRight.uba = False),
+    `uba_rights` are only granted on the business objects the user is linked to
+    through a UserBusinessAccess row (RoleRight.uba = True).
+    """
+    role = Role.objects.create(
+        **{
+            "name": name,
+            "is_system": 0,
+            "is_blocked": False,
+            "audit_user_id": -1,
+            **(custom_props if custom_props else {})
+        }
+    )
+    for uba, bag in ((False, rights), (True, uba_rights)):
+        for right_id in (bag or []):
+            RoleRight.objects.create(
+                role=role,
+                right_id=right_id,
+                uba=uba,
+                audit_user_id=-1,
+            )
+    return role
+
+
+def create_test_user_business_access(user, business_object, link_type, audit_user=None, custom_props=None):
+    """
+    Link a user to a business object under a credential, `link_type` being a code
+    registered through `core.uba_link_types` (not an openIMIS role).
+    """
+    from django.contrib.contenttypes.models import ContentType
+
+    business_access = UserBusinessAccess(
+        **{
+            "user": user,
+            "link_type": link_type,
+            "content_type": ContentType.objects.get_for_model(business_object),
+            "object_id": str(business_object.pk),
+            **(custom_props if custom_props else {})
+        }
+    )
+    business_access.save(user=audit_user)
+    return business_access
+
 
 def create_test_interactive_user(username='TestInteractiveTest', password="Test1234", roles=None, custom_props=None):
     if roles is None:
