@@ -269,6 +269,9 @@ class UserBusinessAccessGQLType(DjangoObjectType):
     business_object_model = graphene.String(
         description="'<app_label>.<model>' of the linked business object")
     link_type_label = graphene.String(description="Label of the link type, from the registry")
+    object_uuid = graphene.String(
+        description="uuid of the linked business object, null when its model has none: "
+                    "object_id is its primary key, while clients reference objects by uuid")
 
     class Meta:
         model = UserBusinessAccess
@@ -290,6 +293,13 @@ class UserBusinessAccessGQLType(DjangoObjectType):
 
     def resolve_business_object_model(self, info):
         return self.model_label
+
+    def resolve_object_uuid(self, info):
+        model = self.content_type.model_class() if self.content_type else None
+        if model is None or not any(field.name == "uuid" for field in model._meta.fields):
+            return None
+        uuid = model.objects.filter(pk=self.object_id).values_list("uuid", flat=True).first()
+        return str(uuid) if uuid is not None else None
 
     def resolve_link_type_label(self, info):
         from core.uba_link_types import get_uba_link_type

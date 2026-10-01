@@ -112,3 +112,29 @@ def has_business_access_links(user, link_types=None, model_label=None, now=None)
         ).exists():
             return True
     return False
+
+
+def has_perms_somewhere(user, perms, link_types=None, now=None):
+    """
+    May `user` exercise `perms` on at least one business object ?
+
+    The question a search or a form lookup asks before any row is known: granted when the
+    global bag covers the rights, or when each right sits in the global or the UBA bag and
+    the user holds a valid link under `link_types` - the rows are then narrowed to the
+    linked objects by the model `get_queryset`, so opening the query grants nothing more.
+    A right held in the UBA bag without any link is granted nowhere.
+    """
+    if isinstance(perms, str):
+        perms = [perms]
+    if user.has_perms(perms):
+        return True
+    from .models import InteractiveUser
+
+    i_user = InteractiveUser.is_interactive_user(user)
+    if i_user is None:
+        return False
+    uba_rights = {str(right) for right in i_user.uba_rights}
+    for perm in perms:
+        if str(perm) not in uba_rights and not user.has_perms([perm]):
+            return False
+    return has_business_access_links(user, link_types, now=now)

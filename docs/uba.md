@@ -133,9 +133,49 @@ The model label may be `None` — the registry already knows which models a cred
 declared on — and the credential may be left out, in which case any credential on that
 instance satisfies the map.
 
-Note that no module passes `access_requirements` yet. Until they do, a right that only
-sits in a role's UBA bag is granted nowhere, and the credential shows up purely as the row
-narrowing above.
+### Opening a query: `has_perms_somewhere`
+
+A search is asked before any row is known, so there is no business map to hand
+`has_perms`. `core.uba_filters.has_perms_somewhere(user, perms, link_types)` answers it:
+the global bag, or each right in the global or UBA bag **and** a valid link under the
+credential the module names. The rows are then narrowed by `get_queryset`, so opening the
+query grants nothing beyond the linked objects. Claim uses it with `CLAIM_ADMIN`; insuree,
+policy and product with `ENROLMENT` (`insuree.uba.can_query`).
+
+### Who passes a business map
+
+| Module | Writes | Map |
+| --- | --- | --- |
+| `insuree` | create / update / delete family and insuree, set family head, change insuree family | `['location.location', village_uuid, 'ENROLMENT']` on the family's village (the insuree's own without a family); a write moving a row checks both villages |
+| `policy` | create / update / renew / suspend / delete policy | the same, on the village of the family the policy covers |
+
+`insuree.uba` holds the helpers (`check_enrolment_perms`, `has_enrolment_perms`). A batch
+(delete families, delete policies, ...) is gated by `has_perms_somewhere`, then checked row
+by row: a row outside the linked villages is reported `unauthorized` and left untouched.
+
+Claim does not pass maps yet: its rights still sit in the global bag, the `CLAIM_ADMIN`
+credential only narrows the rows.
+
+### Location pickers
+
+`locations`, `locationsStr` and `userDistricts` take `ubaLinkType` (e.g. `"ENROLMENT"`) and
+`ubaIncludeAncestors`: the result is restricted to the linked locations plus, by default
+(`LocationConfig.uba_picker_include_ancestors`), their ancestors so a picker can walk the
+tree down to them. Opt in, like the row filter: without `ubaLinkType` nothing changes, and a
+user holding no such link keeps the district scope. Navigating to an ancestor does not make
+it assignable, the mutations check the credential on the location they write.
+
+### Products
+
+`products` / `product`: the query right held globally opens every product; held in the UBA
+bag with an `ENROLMENT` link it opens the national products (no location) and those attached
+to a linked village or any location above it.
+
+### The links on the client
+
+`userBusinessAccess` returns the caller's own valid links to anybody authenticated.
+`objectId` is the linked object's primary key; `objectUuid` is its uuid (null for a model
+without one), which is what a client builds `accessRequirements` from.
 
 ## Tests
 
@@ -143,4 +183,7 @@ narrowing above.
 - `core/tests/test_uba_filters.py` — the id resolution and the prefix helper
 - `location/test_uba.py` — the registration, the path derivation, the OR/AND composition
 - `claim/tests/test_uba.py` — every claim right, on the linked health facility only
-- `insuree/tests/test_uba.py`, `policy/test_uba.py` — the `ENROLMENT` narrowing
+- `insuree/tests/test_uba.py`, `policy/test_uba.py` — the `ENROLMENT` narrowing, the
+  search gate and the per village checks of the writes
+- `location/test_uba.py` `UbaLocationPickerTest` — the picker scope
+- `product/tests/test_uba.py` — the products offered to an enrolment officer

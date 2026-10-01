@@ -195,3 +195,61 @@ class UbaFilterQueryTest(TestCase):
         self.assertFalse(has_business_access_links(self.user, _LINK_TYPE, "core.officer"))
         self._link()
         self.assertTrue(has_business_access_links(self.user, _LINK_TYPE, "core.officer"))
+
+
+class HasPermsSomewhereTest(TestCase):
+    """
+    `has_perms_somewhere`, the gate of a search or a form lookup: the global bag, or the
+    right in the UBA bag together with a link under the credential the module names.
+    """
+
+    RIGHT = 101001
+
+    @classmethod
+    def setUpTestData(cls):
+        from core.apps import ENROLMENT_UBA_LINK_TYPE
+        from core.test_helpers import create_test_role
+
+        cls.link_type = ENROLMENT_UBA_LINK_TYPE
+        cls.village = create_test_village({"name": "UbaSomewhere"})
+        uba_role = create_test_role(name="UBA somewhere", uba_rights=[cls.RIGHT])
+        global_role = create_test_role(name="Global somewhere", rights=[cls.RIGHT])
+        cls.linked = create_test_interactive_user(username="ubasomelinked", roles=[uba_role.id])
+        cls.unlinked = create_test_interactive_user(username="ubasomeunlinked", roles=[uba_role.id])
+        cls.global_user = create_test_interactive_user(username="ubasomeglobal", roles=[global_role.id])
+        cls.link = create_test_user_business_access(
+            user=cls.linked, business_object=cls.village, link_type=cls.link_type)
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_the_global_bag_is_enough(self):
+        from core.uba_filters import has_perms_somewhere
+
+        self.assertTrue(has_perms_somewhere(self.global_user, [str(self.RIGHT)], self.link_type))
+
+    def test_the_uba_bag_needs_a_link(self):
+        from core.uba_filters import has_perms_somewhere
+
+        self.assertTrue(has_perms_somewhere(self.linked, [str(self.RIGHT)], self.link_type))
+        self.assertFalse(has_perms_somewhere(self.unlinked, [str(self.RIGHT)], self.link_type))
+
+    def test_the_link_must_be_under_the_named_credential(self):
+        from core.apps import CLAIM_ADMIN_UBA_LINK_TYPE
+        from core.uba_filters import has_perms_somewhere
+
+        self.assertFalse(has_perms_somewhere(self.linked, [str(self.RIGHT)], CLAIM_ADMIN_UBA_LINK_TYPE))
+
+    def test_a_right_in_neither_bag_is_refused(self):
+        from core.uba_filters import has_perms_somewhere
+
+        self.assertFalse(has_perms_somewhere(self.linked, ["101002"], self.link_type))
+
+    def test_the_link_exposes_the_uuid_of_the_linked_object(self):
+        from core.gql_queries import UserBusinessAccessGQLType
+
+        self.assertEqual(
+            str(self.village.uuid), UserBusinessAccessGQLType.resolve_object_uuid(self.link, None))
