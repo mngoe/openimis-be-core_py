@@ -112,6 +112,8 @@ class OpenIMISHistoryMixin(DirtyFieldsMixin, CachedModelMixin, Model):
         if not self.is_dirty(check_relationship=True) and getattr(self, 'active', True):
             self.version = self.version + 1
             self.active = False
+            if hasattr(self, "date_deactivated"):
+                self.date_deactivated = py_datetime.now()
             if user:
                 self._history_user = user
             # check if we have business model
@@ -119,7 +121,7 @@ class OpenIMISHistoryMixin(DirtyFieldsMixin, CachedModelMixin, Model):
                 # When a replacement entity is deleted, the link should be removed
                 # from replaced entity so a new replacement could be generated
                 replaced_entity = self.__class__.objects.filter(
-                    replacement_uuid=self.id
+                    replacement_uuid=self.uuid
                 ).first()
                 if replaced_entity:
                     replaced_entity.replacement_uuid = None
@@ -158,9 +160,9 @@ class OpenIMISHistoryMixin(DirtyFieldsMixin, CachedModelMixin, Model):
     def filter_validity(arg="validity", prefix="", **kwargs):
         validity = kwargs.get(arg, None)
         if not validity:
-            return [Q(active=True)]
+            return [Q(**{f"{prefix}active": True})]
         else:
-            return [Q(active=False) | Q(date_deactivated__gte=validity)]
+            return [Q(**{f"{prefix}active": True}) | Q(**{f"{prefix}date_deactivated__gte": validity})]
 
     class Meta:
         abstract = True
@@ -181,7 +183,7 @@ class OpenIMISModel(OpenIMISHistoryMixin):
     date_deactivated = DateTimeField(null=True, default=None)
 
     def set_uuid(self):
-        self.uuid = uuidv7
+        self.uuid = uuidv7()
 
     def set_pk(self):
         # done automatically
@@ -231,7 +233,7 @@ class ValidityMixin(Model):
         # 2 step - update the fields for the entity to be replaced
         self._update_replaced_entity(
             user=user,
-            uuid_from_new_entity=new_entity.id,
+            uuid_from_new_entity=new_entity.uuid,
             date_valid_from_new_entity=new_entity.date_valid_from,
         )
 

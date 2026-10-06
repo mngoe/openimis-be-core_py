@@ -8,7 +8,7 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin, Group
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
-from django.db import models
+from django.db import models, transaction
 from django.utils.crypto import salted_hmac
 from graphql import ResolveInfo
 import core
@@ -164,34 +164,50 @@ class ObjectMutation:
 
     @classmethod
     def object_mutated(cls, user, mutation_log_id=None, client_mutation_id=None, *args, **kwargs):
-        # This method should fail silently to not disrupt the actual mutation
-        # noinspection PyBroadException
+        # The link is written in the mutation transaction: failing to write it
+        # fails the whole mutation, nothing it wrote is kept.
         try:
-            args_models = {k + "_id": v.id for k, v in kwargs.items() if isinstance(v, models.Model)}
-            if len(args_models) == 0 or len(args_models) > 1:
-                logger.error("Trying to update ObjectMutationLink with several models in params: %s",
-                             ", ".join(args_models.keys()))
-                return
-            if mutation_log_id:
-                cls.objects.get_or_create(mutation_id=mutation_log_id, **args_models)
-            elif client_mutation_id:
-                mutations = MutationLog.objects \
-                    .filter(client_mutation_id=client_mutation_id) \
-                    .filter(user=user) \
-                    .values_list("id", flat=True) \
-                    .order_by("-request_date_time")[:2]  # Only ask for 2 for the warning, we'll only use 1
-                if len(mutations) == 2:
-                    # Warning because if done too often, this would cause performance issues in this query
-                    logger.warning("Two or more mutations found for id %s, using the most recent one",
-                                   client_mutation_id)
-                if len(mutations) == 0:
-                    logger.debug("No mutation found for client_mutation_id %s, ignoring", client_mutation_id)
-                    return
-                cls.objects.get_or_create(mutation_id=mutations[0], **args_models)
-            else:
-                logger.warning(
-                    "Trying to update a %s without either mutation id or client_mutation_id, ignoring", cls.__name__)
-        except Exception as exc:
-            # The mutation shouldn't fail because we couldn't store the UUID
+            cls._object_mutated(user, mutation_log_id, client_mutation_id, **kwargs)
+        except Exception:
             logger.error("Error updating the %s object", cls.__name__, exc_info=True)
+            # callers usually catch this and return it as an error message:
+            # make sure the transaction is rolled back anyway
+            if transaction.get_connection().in_atomic_block:
+                transaction.set_rollback(True)
+            raise
+
+    @classmethod
+    def _link(cls, mutation_id, args_models):
+        # the on_xxx_mutation signal handlers may already have linked the object
+        # to this mutation: an existing link, even duplicated, is not an error
+        # (unlike get_or_create, which raises MultipleObjectsReturned)
+        if not cls.objects.filter(mutation_id=mutation_id, **args_models).exists():
+            cls.objects.create(mutation_id=mutation_id, **args_models)
+
+    @classmethod
+    def _object_mutated(cls, user, mutation_log_id=None, client_mutation_id=None, **kwargs):
+        args_models = {k + "_id": v.id for k, v in kwargs.items() if isinstance(v, models.Model)}
+        if len(args_models) == 0 or len(args_models) > 1:
+            logger.error("Trying to update ObjectMutationLink with several models in params: %s",
+                         ", ".join(args_models.keys()))
+            return
+        if mutation_log_id:
+            cls._link(mutation_log_id, args_models)
+        elif client_mutation_id:
+            mutations = MutationLog.objects \
+                .filter(client_mutation_id=client_mutation_id) \
+                .filter(user=user) \
+                .values_list("id", flat=True) \
+                .order_by("-request_date_time")[:2]  # Only ask for 2 for the warning, we'll only use 1
+            if len(mutations) == 2:
+                # Warning because if done too often, this would cause performance issues in this query
+                logger.warning("Two or more mutations found for id %s, using the most recent one",
+                               client_mutation_id)
+            if len(mutations) == 0:
+                logger.debug("No mutation found for client_mutation_id %s, ignoring", client_mutation_id)
+                return
+            cls._link(mutations[0], args_models)
+        else:
+            logger.warning(
+                "Trying to update a %s without either mutation id or client_mutation_id, ignoring", cls.__name__)
 

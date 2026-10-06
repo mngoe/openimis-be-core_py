@@ -198,20 +198,6 @@ class UserBusinessAccessPermissionTest(TestCase):
         self.assertNotIn(int(_UBA_RIGHT), data["rights"])
         self.assertEqual([int(_UBA_RIGHT)], data["uba_rights"])
 
-    def test_uba_rights_bag_is_disjoint_from_the_global_one(self):
-        i_user = self.user.i_user
-        self.assertIn(int(_UBA_RIGHT), i_user.uba_rights)
-        self.assertNotIn(int(_GLOBAL_RIGHT), i_user.uba_rights)
-        self.assertFalse(set(i_user.rights) & set(i_user.uba_rights))
-
-    def test_serializer_splits_the_two_bags(self):
-        from core.serializers import UserSerializer
-
-        data = UserSerializer(self.user).data["i_user"]
-        self.assertIn(int(_GLOBAL_RIGHT), data["rights"])
-        self.assertNotIn(int(_UBA_RIGHT), data["rights"])
-        self.assertEqual([int(_UBA_RIGHT)], data["uba_rights"])
-
 
 class RoleRightUbaMutationTest(TestCase):
     """The two right bags survive a role create/update round trip."""

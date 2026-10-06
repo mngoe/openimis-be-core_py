@@ -102,13 +102,14 @@ class PermissionDeclarationTestCase(TestCase):
         for right_id, holders in seen.items():
             if len(holders) == 1:
                 continue
-            for holder in holders:
-                with self.subTest(right=right_id, holder=holder):
-                    target = INTENTIONALLY_SHARED.get(holder)
-                    self.assertTrue(
-                        target is None or target in holders,
-                        f"{holder} shares right {right_id} unintentionally",
-                    )
+            with self.subTest(right=right_id):
+                # a legit share is one owner, every other holder declared as sharing it
+                sharers = [holder for holder in holders if holder in INTENTIONALLY_SHARED]
+                owners = set(holders) - set(sharers)
+                targets = {INTENTIONALLY_SHARED[holder] for holder in sharers}
+                message = f"right {right_id} is shared unintentionally by {holders}"
+                self.assertEqual(len(owners), 1, message)
+                self.assertEqual(owners, targets, message)
 
     def test_django_permission_names_are_unique(self):
         """Even the actions that share a right id keep distinct django names."""

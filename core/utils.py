@@ -11,7 +11,6 @@ import graphene
 from django.apps import AppConfig
 from django.conf import settings
 from django.http import FileResponse
-from django.db import connection as db_connection
 from django.db import models
 from django.db.models import ForeignKey, Func, Q, UUIDField
 from django.utils.translation import gettext as _
@@ -466,9 +465,6 @@ def get_cached_foreign_key(instance, fk_field_name):
         instance,
         fk_field_name,
     )
-    # do nothing if exists already
-    # if getattr(instance, fk_field_name, None) is not None:
-    #     return None
     # Get the model field
     try:
         field = instance._meta.get_field(fk_field_name)
@@ -496,6 +492,18 @@ def get_cached_foreign_key(instance, fk_field_name):
     if fk_value is None:
         logger.debug("ForeignKey value for %s is None", fk_field_name)
         return None
+
+    related_model = field.related_model
+    cached_data = cache.get(get_cache_key(related_model, fk_value))
+    if not isinstance(cached_data, dict):
+        logger.debug("No cached %s for %s", related_model.__name__, fk_value)
+        return None
+    related = related_model(**cached_data)
+    related._state.adding = False
+    related._state.db = "default"
+    # fill the relation cache so that instance.<fk_field_name> does not hit the DB
+    field.set_cached_value(instance, related)
+    return related
 
 
 def clean_fk(instance):
@@ -544,7 +552,7 @@ class GenerateUUIDv7(Func):
     template = '%(function)s()'
 
     def as_sql(self, compiler, connection, **extra_context):
-        vendor = db_connection.vendor
+        vendor = connection.vendor
 
         if vendor == 'postgresql':
             # PostgreSQL 18+ has native uuidv7()
@@ -584,10 +592,6 @@ class RandomUUID(Func):
 
     # Optional: fallback for other DBs (e.g. SQLite for dev)
     def as_sql(self, compiler, connection, **extra_context):
-        # if connection.vendor == 'postgresql':
-        #     return self.as_postgresql(compiler, connection, **extra_context)
-        # elif connection.vendor in ('microsoft', 'mssql'):
-        #     return self.as_microsoft(compiler, connection, **extra_context)
         if extra_context.get('function', self.function) is None:
             # You can raise or use a default
             raise NotImplementedError(f"RandomUUID not supported on {connection.vendor}")
@@ -669,9 +673,13 @@ class CachedModelMixin:
         Deletes the cache entry for this object.
         """
         if self.USE_CACHE:
-            cache_key = f"{self.__class__.__name__}:{self.pk}"
-            cache.delete(cache_key)
-            logger.debug(f"Removed instance from cache: {cache_key}")
+            cache_keys = [get_cache_key(self.__class__, self.pk)]
+            for f in getattr(self, "UNIQUE_FIELDS", {"id", "uuid", "pk"}):
+                value = getattr(self, f, self.pk)
+                if value is not None and value != self.pk:
+                    cache_keys.append(get_cache_key(self.__class__, value))
+            cache.delete_many(cache_keys)
+            logger.debug("Removed instance from cache: %s", cache_keys)
 
     class Meta:
         abstract = True

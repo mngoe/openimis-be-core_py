@@ -111,9 +111,11 @@ def require(user, entity, *actions, match="any"):
     """
     if match not in ("any", "all"):
         raise ValueError("match must be 'any' or 'all'")
-    return user.has_perms(
-        perms(entity, *actions), list_evaluation_or=(match == "any")
-    )
+    rights = perms(entity, *actions)
+    if match == "all":
+        return user.has_perms(rights)
+    # User.has_perms has no OR mode: ask for each right on its own
+    return any(user.has_perms([right]) for right in rights)
 
 
 def django_perms(entity, *actions):

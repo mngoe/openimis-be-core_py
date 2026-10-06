@@ -2,7 +2,6 @@ import logging
 from gettext import gettext as _
 
 from django.apps import apps
-from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -230,6 +229,9 @@ def _business_object_pk(model_label, object_ref):
         logger.warning("Unknown business object model '%s'", model_label)
         return None
     queryset = model.objects.all()
+    # a versioned model keeps its history in the same table: only link the live row
+    if any(f.name == "validity_to" for f in model._meta.fields):
+        queryset = queryset.filter(validity_to__isnull=True)
     if any(f.name == "uuid" for f in model._meta.fields):
         pk = queryset.filter(uuid=object_ref).values_list("pk", flat=True).first()
         if pk is not None:

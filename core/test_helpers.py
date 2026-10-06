@@ -69,6 +69,16 @@ def create_test_role(name="TestRole", rights=None, uba_rights=None, custom_props
     return role
 
 
+def get_or_create_test_admin_role(name="TestIMISAdmin"):
+    """
+    An IMIS Administrator role (`is_system=64`) created by the test itself: the user
+    holding it is a superuser, so the tests do not depend on the system roles of a
+    seeded database.
+    """
+    role = Role.objects.filter(name=name, is_system=64, validity_to__isnull=True).first()
+    return role if role else create_test_role(name=name, custom_props={"is_system": 64})
+
+
 def create_test_user_business_access(user, business_object, link_type, audit_user=None, custom_props=None):
     """
     Link a user to a business object under a credential, `link_type` being a code
@@ -91,7 +101,7 @@ def create_test_user_business_access(user, business_object, link_type, audit_use
 
 def create_test_interactive_user(username='TestInteractiveTest', password="Test1234", roles=None, custom_props=None):
     if roles is None:
-        roles = [7, 1, 2, 3, 4, 5, 6]
+        roles = [get_or_create_test_admin_role().id]
     i_user = InteractiveUser.objects.create(
         **{
             "language_id": "en",
