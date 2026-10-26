@@ -410,11 +410,7 @@ class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
     REQUIRED_FIELDS = []
 
     objects = UserManager()
-    
-    def check_password(self, *args, **kwargs):
-        if self._u:
-            return self._u.check_password( *args, **kwargs)
-        return False
+
 
     def check_password(self, *args, **kwargs):
         if self._u:
