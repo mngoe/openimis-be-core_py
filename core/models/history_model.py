@@ -256,4 +256,3 @@ class HistoryBusinessModel(HistoryModel):
 
     class Meta:
         abstract = True
-

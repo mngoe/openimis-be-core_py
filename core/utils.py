@@ -1,7 +1,7 @@
 import uuid
 import json
 from importlib import import_module
-from typing import Type, Dict, Any
+from typing import Dict, Any
 
 import jsonschema
 
@@ -305,7 +305,6 @@ class CachedManager(models.Manager):
                     cached_instance._state.adding = False  # Mark as not new (DB-loaded simulation)
                     if hasattr(cached_instance, '_state'):
                         cached_instance._state.db = 'default'  # Optional: Set DB alias if needed
-                    
                     for fk in self.CACHED_FK:
                         get_cached_foreign_key(cached_instance, fk)
                     logger.debug("Cache hit for key: %s", cache_key)
@@ -393,7 +392,6 @@ class CachedManager(models.Manager):
         if uncached_values:
             db_filter = {f"{field}__in": uncached_values}
             db_qs = super().filter(**db_filter)
-            
             db_instances = list(db_qs)
             for instance in db_instances:
                 instance.update_cache()
@@ -441,7 +439,6 @@ def get_cached_foreign_key(instance, fk_field_name):
     Returns:
         The cached related object or None if not in cache or invalid.
     """
-    
     logger.debug("get_cached_foreign_key called: instance=%s, fk_field_name=%s", instance, fk_field_name)
     # do nothing if exists already
     # if getattr(instance, fk_field_name, None) is not None:

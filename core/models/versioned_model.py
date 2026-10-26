@@ -17,7 +17,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 class BaseVersionedModel(CachedModelMixin, models.Model):
     validity_from = DateTimeField(db_column='ValidityFrom', default=py_datetime.now)
     validity_to = DateTimeField(db_column='ValidityTo', blank=True, null=True)
@@ -107,5 +106,3 @@ class UUIDVersionedModel(BaseVersionedModel):
 
     class Meta:
         abstract = True
-
-
