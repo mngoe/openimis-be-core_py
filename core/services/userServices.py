@@ -67,6 +67,10 @@ def create_or_update_interactive_user(user_id, data, audit_user_id, connected):
             i_user, data["districts"], data_subset["audit_user_id"]
         )
     if "programs" in data:
+        current_programs = program_models.Program.objects.filter(user=i_user)
+        programs_to_remove = current_programs.exclude(idProgram__in=data["programs"])
+        for program in programs_to_remove:
+            program.user.remove(i_user)
         programs = program_models.Program.objects.filter(idProgram__in=data["programs"])
         for program in programs:
             program.user.add(i_user)
