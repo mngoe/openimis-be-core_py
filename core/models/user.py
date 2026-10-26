@@ -430,16 +430,10 @@ class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
     @property
     def _u(self):
         return self.i_user or self.officer or self.claim_admin or self.t_user
-    
-    
-    @property
-    def language(self):
-        return self._u.langage if self._u else None 
-    
 
     @property
     def language(self):
-        return self._u.langage if self._u else None 
+        return self._u.langage if self._u else None
 
     def has_perms(self, perm_list, obj=None):
         if self.is_imis_admin:
