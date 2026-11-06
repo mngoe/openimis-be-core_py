@@ -1,7 +1,7 @@
 import uuid
 import json
 from importlib import import_module
-from typing import Type, Dict, Any
+from typing import Dict, Any
 
 import jsonschema
 
@@ -18,6 +18,8 @@ from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError, FieldDoesNotExist
 from django.core.files.storage import default_storage
 from django.core.cache import caches
+from functools import lru_cache
+import threading
 
 logger = logging.getLogger(__file__)
 
@@ -40,6 +42,17 @@ __all__ = [
     "ExtendedRelayConnection",
 ]
 
+_request_local = threading.local()
+
+def get_current_user():
+    return getattr(_request_local, "user", None)
+
+def set_current_user(user):
+    _request_local.user = user
+
+def clear_current_user():
+    if hasattr(_request_local, "user"):
+        del _request_local.user
 
 class TimeUtils(object):
 
@@ -214,22 +227,29 @@ class CachedManager(models.Manager):
         Overrides get() to use cache for single exact lookups on pk, id, or uuid.
         Returns a single instance or raises DoesNotExist/MultipleObjectsReturned.
         """
-        if not getattr(self.model, 'USE_CACHE', False):
+        if not getattr(self.model, "USE_CACHE", False):
             return super().get(*args, **kwargs)
-        is_simple, key, value, field, lookup = self._is_simple_lookup(args, kwargs)
-    
 
-        if is_simple and lookup == 'exact':
+        is_simple, key, value, field, lookup = self._is_simple_lookup(args, kwargs)
+
+        if is_simple and lookup == "exact":
             # Try cache lookup for exact queries
             cache_result = self._handle_cache_lookup(field, value, lookup)
             if cache_result is not None:
                 cached_qs = cache_result
-                logger.debug("Cache hit for get() with key: %s", get_cache_key(self.model, self._normalize_value(value)))
-                return cached_qs.first()  # Use first() to get single instance
-                
-        # Fallback to default get() for non-simple queries or cache miss
+
+                objects = list(cached_qs)
+
+                for obj in objects:
+                    if str(obj.uuid) == str(value):
+                        logger.debug(
+                            "Cache hit for get() with key: %s",
+                            get_cache_key(self.model, self._normalize_value(value))
+                        )
+                        return obj
+
         instance = super().get(*args, **kwargs)
-        
+
         # Cache the instance for future lookups
         instance.update_cache()
         return instance
@@ -285,7 +305,6 @@ class CachedManager(models.Manager):
                     cached_instance._state.adding = False  # Mark as not new (DB-loaded simulation)
                     if hasattr(cached_instance, '_state'):
                         cached_instance._state.db = 'default'  # Optional: Set DB alias if needed
-                    
                     for fk in self.CACHED_FK:
                         get_cached_foreign_key(cached_instance, fk)
                     logger.debug("Cache hit for key: %s", cache_key)
@@ -373,7 +392,6 @@ class CachedManager(models.Manager):
         if uncached_values:
             db_filter = {f"{field}__in": uncached_values}
             db_qs = super().filter(**db_filter)
-            
             db_instances = list(db_qs)
             for instance in db_instances:
                 instance.update_cache()
@@ -421,7 +439,6 @@ def get_cached_foreign_key(instance, fk_field_name):
     Returns:
         The cached related object or None if not in cache or invalid.
     """
-    
     logger.debug("get_cached_foreign_key called: instance=%s, fk_field_name=%s", instance, fk_field_name)
     # do nothing if exists already
     # if getattr(instance, fk_field_name, None) is not None:
@@ -688,3 +705,50 @@ def clear_cache(instance):
 
 def get_cache_key(model, id):
     return f"cs_{model.__name__}_{id}"
+
+@lru_cache(maxsize=1)
+def collect_all_gql_permissions():
+    """
+    Collect all GQL permission codes from Django app configs into a dict structure:
+    {app: {perm_name: [perm_ids]}}.
+    Scans for attributes in DEFAULT_CFG or DEFAULT_CONFIG ending with '_perms' that are lists.
+    """
+    excluded_apps = [
+        "health_check.cache",
+        "health_check",
+        "health_check.db",
+        "test_without_migrations",
+        "rules",
+        "graphene_django",
+        "rest_framework",
+        "health_check.storage",
+        "channels",
+        "graphql_jwt.refresh_token.apps.RefreshTokenConfig",
+    ]
+    all_apps = [
+        app
+        for app in settings.INSTALLED_APPS
+        if not app.startswith("django") and app not in excluded_apps
+    ]
+
+    permissions_dict = {}
+    for app in all_apps:
+        try:
+            app_module = __import__(f"{app}.apps")
+            config_dict = None
+            if hasattr(app_module.apps, "DEFAULT_CFG"):
+                config_dict = flatten_dict(app_module.apps.DEFAULT_CFG)
+            elif hasattr(app_module.apps, "DEFAULT_CONFIG"):
+                config_dict = flatten_dict(app_module.apps.DEFAULT_CONFIG)
+
+            if config_dict:
+                app_perms = {}
+                for key, value in config_dict.items():
+                    if key.endswith("_perms") and isinstance(value, list):
+                        app_perms[key] = [str(perm) for perm in value]
+                if app_perms:  # Only add apps with permissions
+                    permissions_dict[app] = app_perms
+        except (ImportError, AttributeError):
+            continue
+
+    return permissions_dict

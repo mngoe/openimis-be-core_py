@@ -1,11 +1,22 @@
-from core.models import Officer, InteractiveUser, User, TechnicalUser, filter_validity
+from core.models import (
+    Officer,
+    InteractiveUser,
+    User,
+    TechnicalUser,
+    Language,
+    Role,
+    RoleRight,
+    filter_validity
+)
+from django.core.cache import cache
 from core.models.openimis_graphql_test_case import openIMISGraphQLTestCase
 from core.services.userServices import create_or_update_officer_villages
 from core.services import create_or_update_user_roles
 from location.models import Location
 from  uuid import uuid4
 import json
-import time
+import datetime
+from core.utils import collect_all_gql_permissions, set_current_user
 
 def create_test_officer(valid=True, custom_props={}, villages = []):
 
@@ -148,3 +159,86 @@ def compare_dicts(dict1, dict2):
 
 def AssertMutation(test_obj,mutation_uuid, token ):
     return openIMISGraphQLTestCase().get_mutation_result(mutation_uuid, token)
+
+def create_test_role(perm_names=[], name=None, is_system=0, is_blocked=False, custom_props=None):
+    """
+    Create a test role with permissions specified by name as they appear in the module DEFAULT config.
+
+    Args:
+        perm_names: List of permission names (e.g., ["gql_query_roles_perms", "gql_mutation_create_roles_perms"])
+        name: Optional role name, defaults to "TestRole"
+        is_system: System role flag (default 0 for non-system)
+        is_blocked: Whether role is blocked (default False)
+        custom_props: Additional properties for the role
+
+    Returns:
+        Role object
+    """
+    if custom_props is None:
+        custom_props = {}
+    else:
+        custom_props = {k: v for k, v in custom_props.items() if hasattr(Role, k)}
+
+    if name is None:
+        name = "TestRole"
+
+    # Check if role already exists by name
+    existing_role = Role.objects.filter(name=name, *Role.filter_validity()).first()
+    if existing_role:
+        return existing_role
+
+    # Collect all permissions from DEFAULT configs
+    permissions_dict = collect_all_gql_permissions()
+
+    # Flatten permission IDs for the given names
+    flat_perms = {}
+    for app_perms in permissions_dict.values():
+        for perm_name, perm_ids in app_perms.items():
+            flat_perms[perm_name] = perm_ids
+
+    right_ids = []
+    for perm_name in perm_names:
+        if perm_name not in flat_perms:
+            raise Exception(f"Permission {perm_name} not found")
+        right_ids.extend(flat_perms[perm_name])
+
+    # Remove duplicates
+    right_ids = list(set(right_ids))
+    # Create the role
+    role_data = {
+        "name": name,
+        "is_system": is_system,
+        "is_blocked": is_blocked,
+        "audit_user_id": -1,
+        "validity_from": datetime.datetime.now(),
+        **custom_props,
+    }
+
+    role = Role.objects.create(**role_data)
+    cache.clear()
+    RoleRight.objects.filter(role=role).delete()
+    # Create role rights
+    for right_id in right_ids:
+        RoleRight.objects.create(
+            role=role,
+            right_id=right_id,
+            audit_user_id=-1,
+            validity_from=datetime.datetime.now(),
+        )
+
+    return role
+
+def create_medical_officer_role():
+    """
+    Create the Medical Officer role with specific permissions.
+    This role should have permissions for claims and claim history reports.
+    """
+    medical_officer_perms = [
+        "gql_query_claims_perms",
+        "gql_mutation_create_claims_perms",
+        "gql_mutation_update_claims_perms",
+        "gql_mutation_submit_claims_perms",
+        "gql_mutation_process_claims_perms",
+        "gql_reports_claim_history_report_perms",
+    ]
+    return create_test_role(perm_names=medical_officer_perms, name="MedicalOfficer", is_system=16)

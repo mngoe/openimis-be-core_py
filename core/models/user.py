@@ -410,7 +410,8 @@ class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
     REQUIRED_FIELDS = []
 
     objects = UserManager()
-    
+
+
     def check_password(self, *args, **kwargs):
         if self._u:
             return self._u.check_password( *args, **kwargs)
@@ -429,12 +430,10 @@ class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
     @property
     def _u(self):
         return self.i_user or self.officer or self.claim_admin or self.t_user
-    
-    
+
     @property
     def language(self):
-        return self._u.langage if self._u else None 
-    
+        return self._u.langage if self._u else None
 
     def has_perms(self, perm_list, obj=None):
         if self.is_imis_admin:
@@ -705,8 +704,6 @@ class Officer(VersionedModel, ExtendableModel):
         managed = True
         db_table = 'tblOfficer'
 
-    
-
 def _get_default_expire_date():
     return py_datetime.now() + timedelta(days=1)
 
@@ -714,4 +711,3 @@ def _get_default_expire_date():
 def _query_export_path(instance, filename):
     # file will be uploaded to MEDIA_ROOT/user_<id>/<filename>
     return F'query_exports/user_{instance.user.uuid}/{filename}'
-
