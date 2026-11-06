@@ -279,7 +279,12 @@ class OpenIMISMutation(graphene.relay.ClientIDMutation):
             data["last_updater_ip_address"] = ip
         if cls.__qualname__ == "SubmitClaimsMutation":
             data["user_submit_ip_address"] = ip
-        if cls.__qualname__ in ["ProcessClaimsMutation", "DeliverClaimsReviewMutation"]:
+        if cls.__qualname__ in [
+            "ProcessClaimsMutation",
+            "DeliverClaimsReviewMutation",
+            "SelectClaimsForReviewMutation",
+            "BypassClaimsReviewMutation",
+            "BypassClaimsFeedbackMutation"]:
             data["user_processed_ip_address"] = ip
         mutation_log = MutationLog.objects.create(
             json_content=json.dumps(data, cls=OpenIMISJSONEncoder),
