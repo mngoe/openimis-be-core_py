@@ -9,6 +9,7 @@ from simple_history.models import HistoricalRecords
 from core.utils import CachedManager, CachedModelMixin, filter_validity as core_filter_validity, uuidv7  # , GenerateUUIDv7
 from simple_history.utils import get_history_manager_for_model
 import datetime as base_datetime
+from core.models.row_security import RowSecurityMixin
 
 
 class HistoryCacheManager(CachedManager):
@@ -52,7 +53,7 @@ class HistoryCacheManager(CachedManager):
         return updated_count
 
 
-class OpenIMISHistoryMixin(DirtyFieldsMixin, CachedModelMixin, Model):
+class OpenIMISHistoryMixin(RowSecurityMixin, DirtyFieldsMixin, CachedModelMixin, Model):
     history = HistoricalRecords(
         inherit=True,
     )
@@ -190,6 +191,10 @@ class OpenIMISModel(OpenIMISHistoryMixin):
         pass
 
     @classmethod
+    def live_rows_q(cls):
+        return Q(active=True)
+
+    @classmethod
     def filter_queryset(cls, queryset=None):
         if queryset is None:
             queryset = cls.objects.filter(active=True)
@@ -204,6 +209,8 @@ class ValidityMixin(Model):
     date_valid_from = DateTimeField(db_column="DateValidFrom", default=py_datetime.now)
     date_valid_to = DateTimeField(db_column="DateValidTo", blank=True, null=True)
     replacement_uuid = UUIDField(db_column="ReplacementUUID", blank=True, null=True)
+
+    business_validity_fields = ("date_valid_from", "date_valid_to")
 
     # to help migration from versionned model
     @property
@@ -284,6 +291,8 @@ class ValidityMixin(Model):
 
 
 class OpenIMISBusinessModel(OpenIMISModel, ValidityMixin):
+    business_validity_fields = ValidityMixin.business_validity_fields
+
     class Meta:
         abstract = True
 

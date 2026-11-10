@@ -184,3 +184,116 @@ def AssertMutation(test_obj,mutation_uuid, token ):
     return openIMISGraphQLTestCase().get_mutation_result(mutation_uuid, token)
 
 
+# ---------------------------------------------------------------------------------------
+# Security parity helpers (ported/adapted from the openimis-dev-tools reference:
+# core.test_helpers.create_right_only_user and location.test_helpers.create_basic_test_locations)
+# ---------------------------------------------------------------------------------------
+
+class SecurityTree:
+    """Two disjoint branches R1>D1>W1>V1 and R2>D2>W2>V2 with a health facility in each
+    district. A 'restricted' user is granted D1 only; every object built on branch 2 must
+    be invisible / untouchable for that user."""
+    pass
+
+
+def create_security_tree(prefix="SP"):
+    """Build the two-branch location tree. `prefix` (max 4 chars) keeps codes unique."""
+    from location.models import HealthFacility, HealthFacilityLegalForm
+    tree = SecurityTree()
+    for n in ("1", "2"):
+        r = Location.objects.create(code=f"{prefix}R{n}", name=f"{prefix} Region {n}", type="R",
+                                    audit_user_id=-1, validity_from="2019-01-01")
+        d = Location.objects.create(code=f"{prefix}D{n}", name=f"{prefix} District {n}", type="D",
+                                    parent=r, audit_user_id=-1, validity_from="2019-01-01")
+        w = Location.objects.create(code=f"{prefix}W{n}", name=f"{prefix} Ward {n}", type="W",
+                                    parent=d, audit_user_id=-1, validity_from="2019-01-01")
+        v = Location.objects.create(code=f"{prefix}V{n}", name=f"{prefix} Village {n}", type="V",
+                                    parent=w, audit_user_id=-1, validity_from="2019-01-01")
+        hf = HealthFacility.objects.create(
+            code=f"{prefix}HF{n}", name=f"{prefix} HF {n}", level="H", care_type="B",
+            legal_form=HealthFacilityLegalForm.objects.filter(code="C").first()
+            or HealthFacilityLegalForm.objects.first(),
+            location=d, validity_from="2019-01-01", audit_user_id=-1, offline=False)
+        for k, val in (("r", r), ("d", d), ("w", w), ("v", v), ("hf", hf)):
+            setattr(tree, f"{k}{n}", val)
+    return tree
+
+
+def create_right_only_user(username, rights, district_ids=(), uba_rights=None, custom_props=None):
+    """A NON-superuser holding exactly `rights` (right ids) in the global bag and assigned
+    to `district_ids`. Mirrors the reference `create_right_only_user`."""
+    from core.services.userServices import create_or_update_user_districts
+    from django.core.cache import cache
+    role = create_test_role(name=f"SP role {username}", rights=list(rights or []),
+                            uba_rights=uba_rights)
+    user = create_test_interactive_user(username=username, roles=[role.id],
+                                        custom_props=custom_props)
+    if district_ids:
+        create_or_update_user_districts(user.i_user, list(district_ids), -1)
+    cache.clear()
+    return user
+
+
+def get_test_token(user):
+    """JWT for HTTP GraphQL / REST calls (Authorization: Bearer <token>)."""
+    from dataclasses import dataclass
+    from graphql_jwt.shortcuts import get_token
+
+    @dataclass
+    class _Ctx:
+        user: object
+
+    return get_token(user, _Ctx(user=user))
+
+
+def perm_ids(perms):
+    """Config right lists are strings or ints; normalise to ints."""
+    return [int(p) for p in (perms or [])]
+
+
+
+
+# ---------------------------------------------------------------------------------------
+# OP-2029 contract helpers (ported from the openIMIS reference, feature/OP-3317)
+# ---------------------------------------------------------------------------------------
+
+def mark_deleted(obj):
+    """Mark ``obj`` deleted the way its model family does, without side effects.
+
+    Written straight to the row, so no audit copy or history entry is made:
+    a test of the validity filter wants exactly one deleted row.
+    """
+    import datetime
+    model = type(obj)
+    fields = {f.name for f in model._meta.fields}
+    changes = {}
+    if "is_deleted" in fields:
+        changes["is_deleted"] = True
+    if "active" in fields:
+        changes["active"] = False
+    if "validity_to" in fields:
+        changes["validity_to"] = datetime.datetime.now()
+    model.objects.filter(pk=obj.pk).update(**changes)
+    # update() bypasses save(), so a cached copy would still read as live
+    if hasattr(obj, "delete_cache"):
+        obj.delete_cache()
+    return obj
+
+
+def assert_row_filters(test, model, queryset, user, live, deleted, default_hides_deleted):
+    """The OP-2029 validity contract of ``model.get_queryset``, on two rows.
+
+    ``live`` and ``deleted`` are primary keys inside ``queryset``.
+    ``default_hides_deleted`` states what a caller asking for nothing gets
+    today, which phase 1 of OP-3317 must not change.
+    """
+    from core.models.row_filters import Validity
+
+    def pks(**kwargs):
+        rows = model.get_queryset(queryset, user, **kwargs)
+        return set(rows.values_list("pk", flat=True)) & {live, deleted}
+
+    test.assertEqual({live} if default_hides_deleted else {live, deleted}, pks())
+    test.assertEqual({live}, pks(validity=Validity.NOW))
+    test.assertEqual({deleted}, pks(validity=Validity.DELETED_NOW))
+    test.assertEqual({live, deleted}, pks(validity=Validity.ALL))

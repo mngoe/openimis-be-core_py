@@ -242,6 +242,39 @@ def _business_object_pk(model_label, object_ref):
         return None
 
 
+def _business_access_keys(business_accesses):
+    """The `(link_type, content_type_id, object_id)` keys a UBA payload asks for."""
+    keys = []
+    for entry in business_accesses:
+        model_label = entry.get("business_object_model")
+        link_type = (entry.get("link_type") or "").strip()
+        if not is_valid_for(link_type, model_label):
+            raise ValidationError(
+                f"'{link_type}' is not a UBA link type registered for {model_label}")
+        content_type = resolve_business_content_type(model_label)
+        object_pk = _business_object_pk(model_label, entry.get("object_id"))
+        if content_type is None or object_pk is None:
+            raise ValidationError(
+                f"No {model_label} matching '{entry.get('object_id')}'")
+        keys.append((link_type, content_type.id, str(object_pk)))
+    return keys
+
+
+def business_access_changes(core_user, business_accesses):
+    """What replacing the UBA links of `core_user` (None for a new user) with
+    `business_accesses` would add and drop, as two sets of keys. Used to check the UBA
+    rights before anything is written."""
+    if business_accesses is None:
+        return set(), set()
+    wanted = set(_business_access_keys(business_accesses))
+    existing = set()
+    if core_user is not None:
+        existing = {
+            (ba.link_type, ba.content_type_id, ba.object_id)
+            for ba in UserBusinessAccess.objects.filter(user=core_user, active=True)}
+    return wanted - existing, existing - wanted
+
+
 def create_or_update_user_business_accesses(core_user, business_accesses, audit_user=None):
     """
     Replace the whole set of UBA links of `core_user` with `business_accesses`, a list of
@@ -254,19 +287,7 @@ def create_or_update_user_business_accesses(core_user, business_accesses, audit_
     if business_accesses is None:
         return list(UserBusinessAccess.objects.filter(user=core_user, active=True))
 
-    wanted = {}
-    for entry in business_accesses:
-        model_label = entry.get("business_object_model")
-        link_type = (entry.get("link_type") or "").strip()
-        if not is_valid_for(link_type, model_label):
-            raise ValidationError(
-                f"'{link_type}' is not a UBA link type registered for {model_label}")
-        content_type = resolve_business_content_type(model_label)
-        object_pk = _business_object_pk(model_label, entry.get("object_id"))
-        if content_type is None or object_pk is None:
-            raise ValidationError(
-                f"No {model_label} matching '{entry.get('object_id')}'")
-        wanted[(link_type, content_type.id, str(object_pk))] = None
+    wanted = {key: None for key in _business_access_keys(business_accesses)}
 
     kept = []
     for business_access in UserBusinessAccess.objects.filter(user=core_user, active=True):

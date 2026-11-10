@@ -7,6 +7,21 @@ from django.core.exceptions import ValidationError
 from core.gql.gql_mutations import ObjectNotExistException
 
 
+from core.models.row_security import target_queryset
+
+
+class TargetLookupMixin:
+    """Where the shared update/delete/replace mixins look their target up.
+
+    Never ``cls._model.objects``: a write must not reach a row its author
+    cannot read (row security, see core.models.row_security).
+    """
+
+    @classmethod
+    def _target_queryset(cls, user):
+        return target_queryset(cls._model, user)
+
+
 class BaseMutation(OpenIMISMutation):
 
     @property
@@ -100,7 +115,7 @@ class BaseCreateMutationMixin:
         return obj
 
 
-class BaseUpdateMutationMixin:
+class BaseUpdateMutationMixin(TargetLookupMixin):
 
     @property
     def _model(self):
@@ -128,7 +143,9 @@ class BaseUpdateMutationMixin:
 
         data['user_updated'] = user.id_for_audit
         data['date_updated'] = TimeUtils.now()
-        updated_object = cls._model.objects.filter(uuid=data['uuid']).first()
+        updated_object = cls._target_queryset(user).filter(uuid=data['uuid']).first()
+        if updated_object is None:
+            cls._object_not_exist_exception(obj_uuid=data['uuid'])
         [setattr(updated_object, key, data[key]) for key in data]
         cls.update_object(updated_object)
 
@@ -139,7 +156,7 @@ class BaseUpdateMutationMixin:
         return object_to_update
 
 
-class BaseDeleteMutationMixin:
+class BaseDeleteMutationMixin(TargetLookupMixin):
     @property
     def _model(self):
         raise NotImplementedError()
@@ -158,8 +175,8 @@ class BaseDeleteMutationMixin:
             raise ValidationError("mutation.authentication_required")
 
     @classmethod
-    def _mutate(cls, uuid):
-        object_to_delete = cls._model.objects.filter(uuid=uuid).first()
+    def _mutate(cls, user=None, uuid=None, **data):
+        object_to_delete = cls._target_queryset(user).filter(uuid=uuid).first()
 
         if object_to_delete is None:
             cls._object_not_exist_exception(uuid)
@@ -193,7 +210,7 @@ class BaseHistoryModelCreateMutationMixin:
         return obj
 
 
-class BaseHistoryModelUpdateMutationMixin:
+class BaseHistoryModelUpdateMutationMixin(TargetLookupMixin):
 
     @property
     def _model(self):
@@ -219,7 +236,9 @@ class BaseHistoryModelUpdateMutationMixin:
             data.pop('client_mutation_id')
         if "client_mutation_label" in data:
             data.pop('client_mutation_label')
-        updated_object = cls._model.objects.filter(id=data['id']).first()
+        updated_object = cls._target_queryset(user).filter(id=data['id']).first()
+        if updated_object is None:
+            cls._object_not_exist_exception(obj_uuid=data['id'])
         [setattr(updated_object, key, data[key]) for key in data]
         cls.update_object(user=user, object_to_update=updated_object)
 
@@ -229,7 +248,7 @@ class BaseHistoryModelUpdateMutationMixin:
         return object_to_update
 
 
-class BaseHistoryModelDeleteMutationMixin:
+class BaseHistoryModelDeleteMutationMixin(TargetLookupMixin):
     @property
     def _model(self):
         raise NotImplementedError()
@@ -265,14 +284,14 @@ class BaseHistoryModelDeleteMutationMixin:
 
     @classmethod
     def __delete_single_obj(cls, user, id_):
-        object_to_delete = cls._model.objects.filter(id=id_).first()
+        object_to_delete = cls._target_queryset(user).filter(id=id_).first()
         if object_to_delete is None:
             cls._object_not_exist_exception(id_)
         else:
             object_to_delete.delete(username=user.username)
 
 
-class BaseHistoryModelReplaceMutationMixin:
+class BaseHistoryModelReplaceMutationMixin(TargetLookupMixin):
     @property
     def _model(self):
         raise NotImplementedError()
@@ -296,7 +315,7 @@ class BaseHistoryModelReplaceMutationMixin:
             data.pop('client_mutation_id')
         if "client_mutation_label" in data:
             data.pop('client_mutation_label')
-        object_to_replace = cls._model.objects.filter(id=data['uuid']).first()
+        object_to_replace = cls._target_queryset(user).filter(id=data['uuid']).first()
         if object_to_replace is None:
             cls._object_not_exist_exception(data['uuid'])
         else:

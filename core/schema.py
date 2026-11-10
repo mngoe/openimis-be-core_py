@@ -244,6 +244,18 @@ class OpenIMISMutation(graphene.relay.ClientIDMutation):
 
     @classmethod
     def mutate_and_get_payload(cls, root, info, **data):
+        # Every OpenIMISMutation requires an authenticated user, but each one
+        # checks inside async_mutate -- after the MutationLog row is written and
+        # possibly a Celery job queued. Refuse anonymous callers first (ported
+        # from the openIMIS reference; AuthenticationRequired maps to HTTP 401).
+        from graphql_jwt.exceptions import PermissionDenied as _JWTPermissionDenied
+        try:
+            from graphql_jwt.exceptions import AuthenticationRequired
+        except ImportError:  # older graphql_jwt
+            AuthenticationRequired = _JWTPermissionDenied
+        _user = getattr(info.context, "user", None)
+        if _user is None or getattr(_user, "is_anonymous", True) or not getattr(_user, "id", None):
+            raise AuthenticationRequired()
         mutation_log = MutationLog.objects.create(
             json_content=json.dumps(data, cls=OpenIMISJSONEncoder),
             user_id=info.context.user.id if info.context.user else None,
@@ -424,9 +436,11 @@ class OrderedDjangoFilterConnectionField(DjangoFilterConnectionField):
     ):
         if not info.context.user.is_authenticated:
             raise PermissionDenied(_("unauthorized"))
-        qs = super(DjangoFilterConnectionField, cls).resolve_queryset(
-            connection, iterable, info, args
-        )
+        from core.gql.row_filter_args import row_filters_in_context
+        with row_filters_in_context(info, args):
+            qs = super(DjangoFilterConnectionField, cls).resolve_queryset(
+                connection, iterable, info, args
+            )
         filter_kwargs = {k: v for k, v in args.items() if k in filtering_args}
         qs = filterset_class(data=filter_kwargs, queryset=qs, request=info.context).qs
 
@@ -1471,20 +1485,58 @@ class DeleteUserMutation(OpenIMISMutation):
             raise PermissionDenied("unauthorized")
         errors = []
         for user_uuid in data["uuids"]:
-            user = User.objects \
+            target = User.objects \
                 .filter(id=user_uuid) \
                 .first()
-            if user is None:
+            if target is None:
                 errors.append({
-                    'title': user,
+                    'title': user_uuid,
                     'list': [{'message':
                               "user.validation.id_does_not_exist" % {'id': user_uuid}}]
                 })
                 continue
-            errors += set_user_deleted(user)
+            # reference core: a user cannot delete themselves (it would lock the last
+            # administrator out), and only an IMIS administrator may delete one
+            if str(target.id) == str(user.id):
+                errors.append({'title': user_uuid,
+                               'list': [{'message': "user.validation.cannot_delete_self"}]})
+                continue
+            if target.is_imis_admin and not user.is_imis_admin:
+                errors.append({'title': user_uuid,
+                               'list': [{'message': "user.validation.cannot_delete_admin"}]})
+                continue
+            errors += set_user_deleted(target)
         if len(errors) == 1:
             errors = errors[0]['list']
         return errors
+
+
+def _check_user_grants(user, user_uuid, data):
+    """What a user-admin may hand out, checked before anything is written.
+
+    - The IMIS Administrator role (is_system = 64) makes a superuser: only an IMIS
+      administrator may grant it (reference core: "only a superuser may hand out the
+      superuser flag"). That also stops a user-admin promoting themself.
+    - Only an IMIS administrator may change an existing administrator's account (else a
+      user-admin could reset an administrator's e-mail or password and take it over).
+    - UBA links grant rights on business objects: adding one needs the UBA create right,
+      dropping one the UBA delete right, whatever the user rights allow.
+    """
+    from core.models.user import IMIS_ADMINISTRATOR_ROLE
+    from core.services.userServices import business_access_changes
+    target = User.objects.filter(id=user_uuid).first() if user_uuid else None
+    if not user.is_imis_admin:
+        role_ids = data.get("roles") or []
+        if role_ids and Role.objects.filter(
+                id__in=role_ids, is_system=IMIS_ADMINISTRATOR_ROLE).exists():
+            raise PermissionDenied(_("mutation.user_admin_role_not_grantable"))
+        if target is not None and target.is_imis_admin:
+            raise PermissionDenied(_("mutation.user_admin_not_editable"))
+    added, dropped = business_access_changes(target, data.get("business_accesses"))
+    if added and not user.has_perms(CoreConfig.gql_mutation_create_user_business_access_perms):
+        raise PermissionDenied(_("mutation.user_business_access_create_unauthorized"))
+    if dropped and not user.has_perms(CoreConfig.gql_mutation_delete_user_business_access_perms):
+        raise PermissionDenied(_("mutation.user_business_access_delete_unauthorized"))
 
 
 @transaction.atomic
@@ -1520,6 +1572,8 @@ def update_or_create_user(data, user):
     if "client_mutation_label" in data:
         data.pop('client_mutation_label')
     user_uuid = data.pop('uuid') if 'uuid' in data else None
+
+    _check_user_grants(user, user_uuid, data)
 
     # user_types is legacy: what gets created no longer depends on it. An interactive user
     # is built whenever roles are given, and the claim admin / enrolment officer entries are

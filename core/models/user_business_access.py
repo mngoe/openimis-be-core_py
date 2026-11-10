@@ -198,12 +198,12 @@ class UserBusinessAccess(OpenIMISBusinessModel):
         return False
 
     @classmethod
-    def get_queryset(cls, queryset, user):
+    def get_queryset(cls, queryset, user, **rows):
         if isinstance(user, ResolveInfo):
             user = user.context.user
         if settings.ROW_SECURITY and user.is_anonymous:
-            return queryset.none()
-        return queryset
+            return cls.no_rows(queryset)
+        return super().get_queryset(queryset, user, **rows)
 
     class Meta:
         verbose_name = "User Business Access"

@@ -6,12 +6,13 @@ import datetime as base_datetime
 from dirtyfields import DirtyFieldsMixin
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import F
+from django.db.models import F, Q
 from simple_history.models import HistoricalRecords
 #from core.datetimes.ad_datetime import datetime as py_datetime
 
 from ..fields import DateTimeField
 from .user import User
+from core.models.row_security import RowSecurityMixin
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ class HistoryModelManager(models.Manager):
         return super().get_queryset().annotate(uuid=F('id'))
 
 
-class HistoryModel(DirtyFieldsMixin, models.Model):
+class HistoryModel(RowSecurityMixin, DirtyFieldsMixin, models.Model):
     id = models.UUIDField(primary_key=True, db_column="UUID", default=None, editable=False)
     objects = HistoryModelManager()
     is_deleted = models.BooleanField(db_column="isDeleted", default=False)
@@ -121,6 +122,10 @@ class HistoryModel(DirtyFieldsMixin, models.Model):
                 'Record has not be deactivating, the object is different and must be updated before deactivating')
 
     @classmethod
+    def live_rows_q(cls):
+        return Q(is_deleted=False)
+
+    @classmethod
     def filter_queryset(cls, queryset=None):
         if queryset is None:
             queryset = cls.objects.all()
@@ -132,6 +137,8 @@ class HistoryModel(DirtyFieldsMixin, models.Model):
 
 
 class HistoryBusinessModel(HistoryModel):
+    business_validity_fields = ("date_valid_from", "date_valid_to")
+
     date_valid_from = DateTimeField(db_column="DateValidFrom", default=py_datetime.now)
     date_valid_to = DateTimeField(db_column="DateValidTo", blank=True, null=True)
     replacement_uuid = models.UUIDField(db_column="ReplacementUUID", blank=True, null=True)

@@ -39,7 +39,7 @@ class BaseService(ABC):
             with transaction.atomic():
                 obj_data = self._adjust_update_payload(obj_data)
                 self.validation_class.validate_update(self.user, **obj_data)
-                obj_ = self.OBJECT_TYPE.objects.filter(id=obj_data['id']).first()
+                obj_ = self._get_target(obj_data['id'])
                 [setattr(obj_, key, obj_data[key]) for key in obj_data]
                 return self.save_instance(obj_)
         except Exception as exc:
@@ -50,10 +50,19 @@ class BaseService(ABC):
         try:
             with transaction.atomic():
                 self.validation_class.validate_delete(self.user, **obj_data)
-                obj_ = self.OBJECT_TYPE.objects.filter(id=obj_data['id']).first()
+                obj_ = self._get_target(obj_data['id'])
                 return self.delete_instance(obj_)
         except Exception as exc:
             return output_exception(model_name=self.OBJECT_TYPE.__name__, method="delete", exception=exc)
+
+    def _get_target(self, obj_id):
+        """The object to update or delete, among those ``self.user`` may read."""
+        from django.core.exceptions import ObjectDoesNotExist
+        from core.models.row_security import target_queryset
+        obj_ = target_queryset(self.OBJECT_TYPE, self.user).filter(id=obj_id).first()
+        if obj_ is None:
+            raise ObjectDoesNotExist(f"{self.OBJECT_TYPE.__name__} {obj_id} does not exist")
+        return obj_
 
     def save_instance(self, obj_):
         obj_.save(username=self.user.username)
