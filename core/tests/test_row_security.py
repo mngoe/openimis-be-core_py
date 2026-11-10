@@ -146,3 +146,41 @@ class TargetQuerysetTest(TestCase):
                 return f"{queryset}-for-{user}"
 
         self.assertEqual("all-for-u", target_queryset(Model, "u"))
+
+
+class LatestHistoryIdsTest(TestCase):
+    """Audits.at(date): each entity's latest history row, set-based (review of
+    openimis/openimis-be-core_py#496), on both the PostgreSQL and the window path."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from core.test_helpers import create_test_interactive_user
+        from tasks_management.models import TaskGroup
+        cls.user = create_test_interactive_user(username="sp_hist_user")
+        cls.rows = []
+        for name in ("A", "B"):
+            row = TaskGroup(code=f"SPH{name}0", completion_policy="ALL")
+            row.save(user=cls.user)
+            for version in (1, 2):
+                row.code = f"SPH{name}{version}"
+                row.save(user=cls.user)
+            cls.rows.append(row)
+
+    def _latest(self):
+        from tasks_management.models import TaskGroup
+        history = TaskGroup.history.filter(id__in=[r.id for r in self.rows])
+        self.assertEqual(6, history.count())
+        ids = RowSecurityMixin._latest_history_ids(history, "id")
+        return sorted(history.filter(history_id__in=ids).values_list("code", flat=True))
+
+    def test_postgresql_distinct_on(self):
+        from django.db import connection
+        if connection.vendor != "postgresql":
+            self.skipTest("PostgreSQL only")
+        self.assertEqual(["SPHA2", "SPHB2"], self._latest())
+
+    def test_window_function_path(self):
+        from unittest import mock
+        from django.db import connection
+        with mock.patch.object(connection, "vendor", "other"):
+            self.assertEqual(["SPHA2", "SPHB2"], self._latest())
