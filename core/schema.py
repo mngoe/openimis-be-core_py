@@ -51,6 +51,7 @@ from .services.roleServices import check_role_unique_name
 from .services.userServices import check_user_unique_email
 from .receivers import clear_role_rights_cache
 from .validation.obligatoryFieldValidation import validate_payload_for_obligatory_fields
+from django.apps import apps
 
 MAX_SMALLINT = 32767
 MIN_SMALLINT = -32768
@@ -184,10 +185,15 @@ class OpenIMISMutation(graphene.relay.ClientIDMutation):
             description="Extension data to be used by signals. Will not be pushed to mutation implementation.")
 
     @classmethod
-    def coerce_mutation_data(cls, input_data, input_class = None):
+    def coerce_mutation_data(cls, input_data, input_class=None):
         if input_class is None:
-            input_class=cls.Input
+            input_class = cls.Input
         coerced_data = {}
+
+        if not isinstance(input_data, dict):
+            logger.debug(f"Expected input_data to be a dict but got {type(input_data)}")
+            return input_data
+
         # Iterate through the input data dictionary
         for key, value in input_data.items():
             if hasattr(input_class, key):
@@ -199,28 +205,35 @@ class OpenIMISMutation(graphene.relay.ClientIDMutation):
                     inner_type = field.of_type
                     coerced_list = []
                     for item in value:
-                        if isinstance(item, str):
-                            coerced_list.append(inner_type.parse_value(item))
+                        if isinstance(inner_type, graphene.types.enum.EnumMeta):
+                            coerced_list.append(item)  # Append the item directly for enums
+                        elif isinstance(item, str):
+                            if type(inner_type) != graphene.types.structures.NonNull:
+                                coerced_list.append(inner_type.parse_value(item))
+                            else:
+                                coerced_list.append(item) 
                         elif inner_type.__class__ == graphene.utils.subclass_with_meta.SubclassWithMeta_Meta:
-                            coerced_list.append(cls.coerce_mutation_data(item, input_class = inner_type))
+                            coerced_list.append(cls.coerce_mutation_data(item, input_class=inner_type))
                         else:
                             coerced_list.append(item)
                     coerced_data[key] = coerced_list
-                elif field.__class__ == graphene.types.field.Field and isinstance(field.type, graphene.types.enum.EnumMeta):
+                elif field.__class__ == graphene.types.field.Field and isinstance(field.type,
+                                                                                  graphene.types.enum.EnumMeta):
                     # If the field type is Enum
-                    if hasattr(field.type,value):
-                        coerced_data[key] = str(getattr(field.type,value).value)
-                    else: 
+                    if hasattr(field.type, value):
+                        coerced_data[key] = str(getattr(field.type, value).value)
+                    else:
                         coerced_data[key] = value
-                elif field.__class__ == graphene.types.field.Field and isinstance(field.type,graphene.types.structures.NonNull)\
-                    and isinstance(field.type._of_type,graphene.types.enum.EnumMeta):
+                elif field.__class__ == graphene.types.field.Field and isinstance(field.type,
+                                                                                  graphene.types.structures.NonNull) \
+                        and isinstance(field.type._of_type, graphene.types.enum.EnumMeta):
                     # If the field type is Enum
-                    if hasattr(field.type,value):
-                        coerced_data[key] = str(getattr(field.type._of_type,value).value)
-                    else: 
+                    if hasattr(field.type._of_type, value):
+                        coerced_data[key] = str(getattr(field.type._of_type, value).value)
+                    else:
                         coerced_data[key] = value
                 elif field.__class__ == graphene.types.field.Field:
-                    coerced_data[key] = cls.coerce_mutation_data(value, input_class = field._type)
+                    coerced_data[key] = cls.coerce_mutation_data(value, input_class=field._type)
                 elif isinstance(value, str):
                     coerced_data[key] = field.parse_value(value)
                 else:
@@ -228,7 +241,7 @@ class OpenIMISMutation(graphene.relay.ClientIDMutation):
             else:
                 logger.debug(f"key {key} not in {cls.__name__}")
                 coerced_data[key] = value
-           
+
         return coerced_data
         
     @classmethod
@@ -1588,6 +1601,16 @@ def update_or_create_user(data, user):
     # the explicit officer / claim admin payloads still win when they are sent, the business
     # accesses only fill in what the client did not spell out
     if UT_OFFICER in user_types:
+        # dev-csu: an officer attached to a health facility gets that facility's location
+        health_facility_id = data.get('health_facility_id', None)
+        if health_facility_id:
+            try:
+                HealthFacility = apps.get_model('location', 'HealthFacility')
+                hf = HealthFacility.objects.filter(id=health_facility_id).first()
+                if hf and hf.location_id:
+                    data["location_id"] = hf.location_id
+            except Exception as e:
+                logger.warning("Error %s ", str(e))
         officer, officer_created = create_or_update_officer(
             user_uuid, data, user.id_for_audit, is_interactive)
     else:

@@ -15,16 +15,32 @@ from django.db import models
 from django.db.models import ForeignKey, Func, Q, UUIDField
 from django.utils.translation import gettext as _
 import logging
+import threading
 from django.apps import apps
 from django.core.cache import caches
 from functools import lru_cache
-from django.core.exceptions import FieldDoesNotExist, PermissionDenied
+from django.core.exceptions import FieldDoesNotExist, PermissionDenied, ValidationError
 from django.core.files.storage import default_storage
 from uuid6 import uuid7 as uuidv7  # noqa: F401
 
 logger = logging.getLogger(__file__)
 
 cache = caches["default"]
+
+_request_local = threading.local()
+
+
+def get_current_user():
+    return getattr(_request_local, "user", None)
+
+
+def set_current_user(user):
+    _request_local.user = user
+
+
+def clear_current_user():
+    if hasattr(_request_local, "user"):
+        del _request_local.user
 
 __all__ = [
     "TimeUtils",
@@ -242,12 +258,15 @@ class CachedManager(models.Manager):
             # Try cache lookup for exact queries
             cache_result = self._handle_cache_lookup(field, value, lookup)
             if cache_result is not None:
-                cached_qs = cache_result
-                logger.debug(
-                    "Cache hit for get() with key: %s",
-                    get_cache_key(self.model, self._normalize_value(value)),
-                )
-                return list(cached_qs)[0]  # Use first() to get single instance
+                requested = str(self._normalize_value(value)).lower()
+                for obj in list(cache_result):
+                    # a stale or colliding entry must not return another object (dev-csu cache fix)
+                    if str(self._normalize_value(getattr(obj, field, None))).lower() == requested:
+                        logger.debug(
+                            "Cache hit for get() with key: %s",
+                            get_cache_key(self.model, self._normalize_value(value)),
+                        )
+                        return obj
 
         # Fallback to default get() for non-simple queries or cache miss
         instance = super().get(*args, **kwargs)
@@ -328,7 +347,7 @@ class CachedManager(models.Manager):
                         get_cached_foreign_key(cached_instance, fk)
                     logger.debug("Cache hit for key: %s", cache_key)
                     return self._instances_to_queryset([cached_instance], True)
-                elif isinstance(cached_data, (uuid.UUID, str)):
+                elif isinstance(cached_data, (uuid.UUID, str, int)):
                     return self._handle_cache_lookup("pk", cached_data, lookup)
                 else:
                     logger.error("Wrong type in cache for key: %s", cache_key)
@@ -356,7 +375,7 @@ class CachedManager(models.Manager):
                             get_cached_foreign_key(instance, fk)
                         cached_instances.append(instance)
                         logger.debug("Cache hit for key: %s", ck)
-                    elif isinstance(data, (uuid.UUID, str)):
+                    elif isinstance(data, (uuid.UUID, str, int)):
                         cache_result = self._handle_cache_lookup(
                             "pk", data, "exact"
                         )  # Note: Use 'exact' for recursion

@@ -16,18 +16,20 @@ import core
 #from core.datetimes.ad_datetime import datetime as py_datetime
 from django.conf import settings
 
-from ..utils import filter_validity, to_list_permissions
+from ..utils import filter_validity, to_list_permissions, CachedManager
 from .base import *
 from .versioned_model import *
 
 logger = logging.getLogger(__name__)
+from rest_framework import exceptions
 
 # System number of the IMIS Administrator role. A user holding it passes every has_perms check.
 IMIS_ADMINISTRATOR_ROLE = 64
 
 
-class UserManager(BaseUserManager):
-
+class UserManager(BaseUserManager, CachedManager):
+    UNIQUE_FIELDS = {'pk', 'uuid', 'id', 'username'}
+    CACHED_FK = {'i_user'}
     def _create_core_user(self, **fields):
         user = User(**fields)
         user.save()
@@ -110,23 +112,38 @@ class UserManager(BaseUserManager):
 
     def auto_provision_user(self, **kwargs):
         # only auto-provision django user if registered as interactive user
-        try:
-            i_user = InteractiveUser.objects.get(
-                login_name=kwargs['username'],
-                *filter_validity())
-        except InteractiveUser.DoesNotExist:
-            raise PermissionDenied
+        username = kwargs.get('username', kwargs.get('login_name', None) ) 
+        if  not username:
+            raise exceptions.AuthenticationFailed("INCORRECT_CREDENTIALS")
+        i_user = InteractiveUser.objects.filter(
+                login_name__iexact=username,
+                *filter_validity()).first()
+        if not i_user:
+            raise exceptions.AuthenticationFailed("INCORRECT_CREDENTIALS")
+        kwargs['i_user'] = i_user
         user = self._create_core_user(**kwargs)
         user.i_user = i_user
         user.save()
+        if core.auto_provisioning_user_group:
+            group = Group.objects.filter(
+                name=core.auto_provisioning_user_group).first()
+            if group:
+                user_group = UserGroup(user=user, group=group)
+                user_group.save()
+            else:
+                logger.error(f"Group {core.auto_provisioning_user_group} was not found")
         return user, True
 
     def get_or_create(self, **kwargs):
-        user = User.objects.filter(username__iexact=kwargs.get("username")).first()
-        if user:
-            return user, False
-        else:
-            return self.auto_provision_user(**kwargs)
+        if 'username' in kwargs:
+            user = User.objects.filter(username__iexact=kwargs.get("username")).first()
+            if user:
+                return user, False
+        
+        return self.auto_provision_user(**kwargs)
+    
+    def get_queryset(self):
+        return super().get_queryset().prefetch_related('i_user')
 
 
 class TechnicalUser(AbstractBaseUser):
@@ -228,6 +245,7 @@ class RoleRight(VersionedModel):
 
 
 class InteractiveUser(VersionedModel):
+    USE_CACHE = not settings.IS_TESTING
     id = models.AutoField(db_column="UserID", primary_key=True)
     uuid = models.CharField(db_column="UserUUID", max_length=36, default=uuid.uuid4, unique=True)
     language = models.ForeignKey(Language, models.DO_NOTHING, db_column="LanguageID")
@@ -365,19 +383,51 @@ class InteractiveUser(VersionedModel):
                 return hf_model.objects.filter(pk=self.health_facility_id).first()
         return None
 
+    # @property
+    # def is_officer(self):
+    #     return Officer.objects.filter(
+    #         code=self.username, has_login=True, validity_to__isnull=True).exists()
     @property
     def is_officer(self):
-        return Officer.objects.filter(
-            code=self.username, has_login=True, validity_to__isnull=True).exists()
+        cache_name = f"user_eo_{self.login_name}"
+        is_officer = cache.get(cache_name)
+        if is_officer is None:
+            is_officer = Officer.objects.filter(
+                code=self.login_name,
+                has_login=True,
+                *filter_validity()
+            ).exists()
+            cache.set(cache_name, is_officer, None)
+        return is_officer
 
+    # @property
+    # def is_claim_admin(self):
+    #     # Unlike Officer ClaimAdmin model was moved to the claim module,
+    #     # and it's not granted that the module is installed.
+    #     if 'claim' in sys.modules:
+    #         from claim.models import ClaimAdmin
+    #         return ClaimAdmin.objects.filter(
+    #             code=self.username, has_login=True, validity_to__isnull=True).exists()
+    #     else:
+    #         return False
+    
     @property
     def is_claim_admin(self):
         # Unlike Officer ClaimAdmin model was moved to the claim module,
         # and it's not granted that the module is installed.
         if 'claim' in sys.modules:
-            from claim.models import ClaimAdmin
-            return ClaimAdmin.objects.filter(
-                code=self.username, has_login=True, validity_to__isnull=True).exists()
+            cache_name = f"user_ca_{self.login_name}"
+            is_claim_admin = cache.get(cache_name)
+            if is_claim_admin is None:
+                
+                from core.models.user import ClaimAdmin
+                is_claim_admin = ClaimAdmin.objects.filter(
+                    code=self.login_name,
+                    has_login=True,
+                    *filter_validity()
+                ).exists()
+                cache.set(cache_name, is_claim_admin, None)
+            return is_claim_admin
         else:
             return False
 
@@ -432,7 +482,7 @@ class InteractiveUser(VersionedModel):
     @classmethod
     def get_queryset(cls, queryset, user, **rows):
         if isinstance(user, ResolveInfo):
-            user = user.context.user
+            user = user.context.user.i_user
         if settings.ROW_SECURITY and user.is_anonymous:
             return cls.no_rows(queryset)
         return super().get_queryset(queryset, user, **rows)
@@ -457,6 +507,8 @@ class UserRole(VersionedModel):
 
 
 class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
+    USE_CACHE = not settings.IS_TESTING
+
     username = models.CharField(unique=True, max_length=50)
     t_user = models.ForeignKey(TechnicalUser, on_delete=models.CASCADE, blank=True, null=True)
     i_user = models.ForeignKey(InteractiveUser, on_delete=models.CASCADE, blank=True, null=True)
@@ -467,6 +519,12 @@ class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
     REQUIRED_FIELDS = []
 
     objects = UserManager()
+
+
+    def check_password(self, *args, **kwargs):
+        if self._u:
+            return self._u.check_password( *args, **kwargs)
+        return False
 
     def save_history(self, **kwargs):
         # Prevent from saving history. It would lead to error due to username uniqueness.
@@ -481,6 +539,10 @@ class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
     @property
     def _u(self):
         return self.i_user or self.officer or self.claim_admin or self.t_user
+
+    @property
+    def language(self):
+        return self._u.langage if self._u else None
 
     def has_perms(self, perm_list, obj=None, access_requirements=None):
         """
@@ -636,12 +698,17 @@ class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
     def __getattr__(self, name):
         if name == '_u':
             raise ValueError('wrapper has not been initialised')
-        if name == '__name__':
+        elif name == '__name__':
             return self.username
-        if name == 'get_session_auth_hash':
+        elif name == 'get_session_auth_hash':
             return False
-        return getattr(self._u, name)
-
+        elif hasattr(self._u, name):
+            return getattr(self._u, name)
+        elif name in self.__dict__:
+            return self.__dict__[name]
+        else:
+            raise AttributeError(f"User has no attribute {name}")
+        
     def __call__(self, *args, **kwargs):
         # if not self._u:
         #     raise ValueError('wrapper has not been initialised')
@@ -792,8 +859,6 @@ class Officer(VersionedModel, ExtendableModel):
         managed = True
         db_table = 'tblOfficer'
 
-    
-
 def _get_default_expire_date():
     return py_datetime.now() + timedelta(days=1)
 
@@ -801,4 +866,3 @@ def _get_default_expire_date():
 def _query_export_path(instance, filename):
     # file will be uploaded to MEDIA_ROOT/user_<id>/<filename>
     return F'query_exports/user_{instance.user.uuid}/{filename}'
-

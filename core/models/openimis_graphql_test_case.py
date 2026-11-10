@@ -7,6 +7,7 @@ from graphene import Schema
 from graphene.test import Client
 import datetime
 import time
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
@@ -80,18 +81,24 @@ class openIMISGraphQLTestCase(GraphQLTestCase):
             return False
         return True
     
-    def send_mutation_raw(self, mutation_raw, token,variables_param = None,  follow = True):
-        params =  {'headers':{"HTTP_AUTHORIZATION": f"Bearer {token}"}}
+    def send_mutation_raw(self, mutation_raw, token, variables_param=None, follow=True):
+        params = {"headers": {"HTTP_AUTHORIZATION": f"Bearer {token}"}}
         if variables_param:
-            params['variables'] = variables_param
-        response = self.query( mutation_raw,
-           **params,
+            params["variables"] = variables_param
+        response = self.query(
+            mutation_raw,
+            **params,
         )
         self.assertResponseNoErrors(response)
         content = json.loads(response.content)
-        
+
         if follow:
-            return self.get_mutation_result(content['data'][mutation_type]['clientMutationId'],token)
+            mutation_type = list(content['data'].keys())[0]
+            return self.get_mutation_result(
+                content['data'][mutation_type]['internalId'],
+                token,
+                internal=True
+            )
         else:
             return json.loads(response.content)
         
@@ -136,3 +143,7 @@ class openIMISGraphQLTestCase(GraphQLTestCase):
 
         params_as_args = [f'{k}:{wrap_arg(v)}' for k, v in params.items() if v is not None]
         return ", ".join(params_as_args)
+
+    def tearDwon(self):
+        cache.clear()
+        super().tearDwon()

@@ -1,5 +1,8 @@
 from core.models import Officer, InteractiveUser, User, TechnicalUser, filter_validity
-from core.models import Role, RoleRight, UserBusinessAccess
+from core.models import Role, RoleRight, UserBusinessAccess, Language
+from core.utils import collect_all_gql_permissions, set_current_user  # noqa: F401 (dev-csu)
+from django.core.cache import cache
+import datetime
 from core.models.openimis_graphql_test_case import openIMISGraphQLTestCase
 from core.services.userServices import create_or_update_officer_villages
 from core.services import create_or_update_user_roles
@@ -43,17 +46,24 @@ def create_test_officer(valid=True, custom_props={}, villages = []):
         result = create_or_update_officer_villages(eo, [v.id for v in villages], 1)
         return eo
 
-def create_test_role(name="TestRole", rights=None, uba_rights=None, custom_props=None):
+def create_test_role(name="TestRole", rights=None, uba_rights=None, custom_props=None, *,
+                     perm_names=None, is_system=0, is_blocked=False):
     """
     Create a role with its two right bags: `rights` are global (RoleRight.uba = False),
     `uba_rights` are only granted on the business objects the user is linked to
     through a UserBusinessAccess row (RoleRight.uba = True).
+
+    dev-csu call style: `perm_names` are permission names from the modules' DEFAULT
+    configs (e.g. "gql_query_claims_perms"); the role is then found or created by name.
     """
+    if perm_names is not None:
+        return get_or_create_test_role(perm_names, name=name, is_system=is_system,
+                                       custom_props=custom_props)
     role = Role.objects.create(
         **{
             "name": name,
-            "is_system": 0,
-            "is_blocked": False,
+            "is_system": is_system,
+            "is_blocked": is_blocked,
             "audit_user_id": -1,
             **(custom_props if custom_props else {})
         }
@@ -225,24 +235,34 @@ def create_test_user_business_access(user, business_object, link_type, audit_use
 def create_test_interactive_user(username='TestInteractiveTest', password="Test1234", roles=None, custom_props=None):
     if roles is None:
         roles = [get_or_create_test_admin_role().id]
-    i_user = InteractiveUser.objects.create(
-        **{
-            "language_id": "en",
-            "last_name": "TestLastName",
-            "other_names": "Test Other Names",
-            "login_name": username,
-            "audit_user_id": -1,
-            "role_id": roles[0],
-            **(custom_props if custom_props else {})
-        }
-    )
+    custom_props = {k: v for k, v in (custom_props or {}).items() if hasattr(InteractiveUser, k)}
+    # find-or-create (dev-csu): a kept test DB may already hold that user
+    user = None
+    i_user = InteractiveUser.objects.filter(login_name=username).first()
+    if i_user:
+        user = User.objects.filter(i_user=i_user).first()
+    else:
+        user = User.objects.filter(username=username).select_related('i_user').first()
+        if user and getattr(user, 'i_user', None) is not None:
+            i_user = user.i_user
+        else:
+            i_user = InteractiveUser.objects.create(
+                **{
+                    "language_id": "en",
+                    "last_name": "TestLastName",
+                    "other_names": "Test Other Names",
+                    "login_name": username,
+                    "audit_user_id": -1,
+                    "role_id": roles[0],
+                    **custom_props
+                }
+            )
+    if not user:
+        user = User.objects.create(username=username, i_user=i_user)
     i_user.set_password(password)
     i_user.save()
     create_or_update_user_roles(i_user, roles, None)
-    return User.objects.create(
-        username=username,
-        i_user=i_user,
-    )
+    return user
 
 
 def create_test_technical_user(
