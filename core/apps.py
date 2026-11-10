@@ -317,6 +317,12 @@ class CoreConfig(AppConfig):
         CoreConfig.secondary_calendar = cfg["secondary_calendar"]
 
     def ready(self):
+        # before any app's migrations: data migrations write role rights through
+        # the live RoleRight model, which needs tblRoleRight.UBA (core 0029)
+        from django.db.models.signals import pre_migrate
+        from .migration_guards import ensure_roleright_uba_column_pre_migrate
+        pre_migrate.connect(ensure_roleright_uba_column_pre_migrate, sender=self,
+                            dispatch_uid="core_ensure_roleright_uba_column")
         from .models import ModuleConfiguration
         cfg = ModuleConfiguration.get_or_default(MODULE_NAME, DEFAULT_CFG)
         self._configure_calendar(cfg)

@@ -5,6 +5,7 @@ import simple_history.models
 from django.conf import settings
 from django.db import migrations, models
 
+import core.migration_guards
 import core.utils
 
 
@@ -16,16 +17,26 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='roleright',
-            name='uba',
-            field=models.BooleanField(
-                db_column='UBA',
-                default=False,
-                help_text='False: the right is in the global bag, it is granted everywhere. True: the right is '
-                          'granted only on the instances the user has a UserBusinessAccess link on, it never '
-                          'appears in the global bag.',
-            ),
+        # The column may already exist: core.migration_guards adds it before any
+        # migration runs, as other modules' right migrations need it earlier.
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunPython(core.migration_guards.add_uba_column_if_missing,
+                                     migrations.RunPython.noop),
+            ],
+            state_operations=[
+                migrations.AddField(
+                    model_name='roleright',
+                    name='uba',
+                    field=models.BooleanField(
+                        db_column='UBA',
+                        default=False,
+                        help_text='False: the right is in the global bag, it is granted everywhere. True: the right is '
+                                  'granted only on the instances the user has a UserBusinessAccess link on, it never '
+                                  'appears in the global bag.',
+                    ),
+                ),
+            ],
         ),
         migrations.AddConstraint(
             model_name='roleright',
