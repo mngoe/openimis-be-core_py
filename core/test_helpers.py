@@ -79,6 +79,129 @@ def get_or_create_test_admin_role(name="TestIMISAdmin"):
     return role if role else create_test_role(name=name, custom_props={"is_system": 64})
 
 
+def create_imis_admin_role():
+    """Same name as the 26.10 helper; the administrator role is found or created."""
+    return get_or_create_test_admin_role()
+
+
+def resolve_perm_right_ids(perm_names):
+    """The integer right ids behind permission names as declared in the modules' DEFAULT_CFG."""
+    from core.utils import collect_all_gql_permissions
+
+    flat_perms = {}
+    for app_perms in collect_all_gql_permissions().values():
+        flat_perms.update(app_perms)
+    right_ids = set()
+    for perm_name in perm_names:
+        if perm_name not in flat_perms:
+            raise Exception(f"Permission {perm_name} not found")
+        right_ids.update(int(pid) for pid in flat_perms[perm_name])
+    return sorted(right_ids)
+
+
+def _sync_role_rights(role, right_ids):
+    """Make the role's global rights (uba=False) exactly `right_ids`; its UBA rights are left alone."""
+    from django.core.cache import cache
+
+    current = RoleRight.objects.filter(role=role, uba=False, validity_to__isnull=True)
+    if set(current.values_list("right_id", flat=True)) == set(right_ids):
+        return
+    current.delete()
+    for right_id in right_ids:
+        RoleRight.objects.create(role=role, right_id=right_id, uba=False, audit_user_id=-1)
+    # the rights of a user are cached
+    cache.clear()
+
+
+def get_or_create_test_role(perm_names=(), name="TestRole", is_system=0, custom_props=None):
+    """
+    The role named `name`, created when missing, holding exactly the rights behind
+    `perm_names` (permission names as declared in the modules' DEFAULT_CFG).
+
+    Ported from 26.10 (`create_test_role` there): tests ask for a role by what it
+    may do rather than by the id it has in a seeded demo database, so they run on
+    an empty test database too.
+    """
+    role = Role.objects.filter(name=name, validity_to__isnull=True).first()
+    if role is None:
+        role = Role.objects.create(**{
+            "name": name,
+            "is_system": is_system,
+            "is_blocked": False,
+            "audit_user_id": -1,
+            **(custom_props if custom_props else {}),
+        })
+    _sync_role_rights(role, resolve_perm_right_ids(perm_names))
+    return role
+
+
+def create_enrolment_officer_role():
+    """The Enrolment Officer role of the demo fixture (role id 1 there), as in 26.10."""
+    return get_or_create_test_role([
+        "gql_query_report_perms",
+        "gql_query_insuree_perms",
+        "gql_query_insurees_perms",
+        "gql_mutation_update_insurees_perms",
+        "gql_mutation_create_insurees_perms",
+        "gql_mutation_delete_insurees_perms",
+        "gql_query_locations_perms",
+        "gql_query_products_perms",
+        "gql_query_policies_perms",
+        "gql_mutation_create_policies_perms",
+        "gql_mutation_edit_policies_perms",
+        "gql_mutation_renew_policies_perms",
+        "gql_mutation_suspend_policies_perms",
+        "gql_mutation_delete_policies_perms",
+        "gql_query_premiums_perms",
+        "gql_mutation_create_premiums_perms",
+        "gql_mutation_update_premiums_perms",
+        "gql_mutation_delete_premiums_perms",
+        "gql_query_payers_perms",
+    ], name="EnrolmentOfficer", is_system=1)
+
+
+def create_claim_admin_role():
+    """The Claim Administrator role of the demo fixture (role id 9 there), as in 26.10."""
+    return get_or_create_test_role([
+        "gql_query_locations_perms",
+        "gql_query_policies_perms",
+        "gql_query_insuree_perms",
+        "gql_query_insurees_perms",
+        "gql_mutation_create_claims_perms",
+        "gql_mutation_update_claims_perms",
+        "gql_query_claims_perms",
+        "gql_mutation_load_claims_perms",
+        "gql_mutation_restore_claims_perms",
+        "gql_mutation_delete_claims_perms",
+        "gql_query_health_facilities_perms",
+        "gql_query_medical_services_perms",
+        "gql_query_medical_items_perms",
+    ], name="ClaimAdministrator", is_system=256)
+
+
+def create_medical_officer_role():
+    """The Medical Officer role of the demo fixture (role id 5 there), as in 26.10."""
+    return get_or_create_test_role([
+        "gql_query_report_perms",
+        "gql_query_policies_perms",
+        "gql_query_eligibilities_perms",
+        "gql_query_claims_perms",
+        "gql_mutation_create_claims_perms",
+        "gql_mutation_update_claims_perms",
+        "gql_mutation_submit_claims_perms",
+        "gql_mutation_select_claim_feedback_perms",
+        "gql_mutation_bypass_claim_feedback_perms",
+        "gql_mutation_skip_claim_feedback_perms",
+        "gql_mutation_deliver_claim_feedback_perms",
+        "gql_mutation_select_claim_review_perms",
+        "gql_mutation_bypass_claim_review_perms",
+        "gql_mutation_skip_claim_review_perms",
+        "gql_mutation_deliver_claim_review_perms",
+        "gql_mutation_process_claims_perms",
+        "gql_reports_claim_history_report_perms",
+    ], name="MedicalOfficer", is_system=16)
+
+
 def create_test_user_business_access(user, business_object, link_type, audit_user=None, custom_props=None):
     """
     Link a user to a business object under a credential, `link_type` being a code
