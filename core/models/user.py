@@ -420,7 +420,7 @@ class InteractiveUser(VersionedModel):
             is_claim_admin = cache.get(cache_name)
             if is_claim_admin is None:
                 
-                from core.models.user import ClaimAdmin
+                from claim.models import ClaimAdmin
                 is_claim_admin = ClaimAdmin.objects.filter(
                     code=self.login_name,
                     has_login=True,
