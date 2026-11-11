@@ -1,4 +1,5 @@
 import graphene
+from core.gql.scoped_object_type import ScopedQuerysetMixin
 import location.gql_queries
 from core import ExtendedConnection, filter_validity
 from core.models import (Officer, Role, RoleRight, UserRole, User, InteractiveUser, UserMutation, Language,
@@ -12,7 +13,7 @@ from django.core.exceptions import PermissionDenied
 from .utils import prefix_filterset
 
 
-class OfficerGQLType(DjangoObjectType):
+class OfficerGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     This type corresponds to the Enrolment Officer but is a bit more generic than just Enrolment.
     """
@@ -29,13 +30,9 @@ class OfficerGQLType(DjangoObjectType):
         }
         connection_class = ExtendedConnection
 
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        queryset = queryset.filter(*filter_validity())
-        return queryset
 
 
-class RoleGQLType(DjangoObjectType):
+class RoleGQLType(ScopedQuerysetMixin, DjangoObjectType):
     system_role_id = graphene.Int()
 
     class Meta:
@@ -49,9 +46,6 @@ class RoleGQLType(DjangoObjectType):
         }
         connection_class = ExtendedConnection
 
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        return Role.get_queryset(queryset, info)
 
 
 class UserRoleGQLType(DjangoObjectType):
@@ -69,7 +63,7 @@ class UserRoleGQLType(DjangoObjectType):
         return Role.get_queryset(queryset, info)
 
 
-class RoleRightGQLType(DjangoObjectType):
+class RoleRightGQLType(ScopedQuerysetMixin, DjangoObjectType):
     class Meta:
         model = RoleRight
         interfaces = (graphene.relay.Node,)
@@ -81,12 +75,9 @@ class RoleRightGQLType(DjangoObjectType):
         }
         connection_class = ExtendedConnection
 
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        return RoleRight.get_queryset(queryset, info)
 
 
-class InteractiveUserGQLType(DjangoObjectType):
+class InteractiveUserGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     The InteractiveUser represents the regular openIMIS allowed to connect to the web interface. Enrolment Officers
     and Claim Administrators can exist without having web access but when they do, they have a corresponding
@@ -142,12 +133,9 @@ class InteractiveUserGQLType(DjangoObjectType):
         else:
             return None
 
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        return InteractiveUser.get_queryset(queryset, info)
 
 
-class UserGQLType(DjangoObjectType):
+class UserGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """
     This type provides an abstraction of the various user types, TechnicalUser and InteractiveUser. It corresponds
     to the core_User table added in the modular version. The TechnicalUser is for now not exposed here as it is not
@@ -172,9 +160,6 @@ class UserGQLType(DjangoObjectType):
         interfaces = (graphene.relay.Node,)
         connection_class = ExtendedConnection
 
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        return User.get_queryset(queryset, info)
 
     def resolve_client_mutation_id(self, info):
         if not info.context.user.has_perms(CoreConfig.gql_query_users_perms):
@@ -264,7 +249,7 @@ class UbaLinkTypeGQLType(graphene.ObjectType):
         return self.params or {}
 
 
-class UserBusinessAccessGQLType(DjangoObjectType):
+class UserBusinessAccessGQLType(ScopedQuerysetMixin, DjangoObjectType):
     """A user linked to one business object under one credential."""
     business_object_model = graphene.String(
         description="'<app_label>.<model>' of the linked business object")
@@ -306,6 +291,3 @@ class UserBusinessAccessGQLType(DjangoObjectType):
         link_type = get_uba_link_type(self.link_type)
         return link_type.label if link_type else self.link_type
 
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        return UserBusinessAccess.get_queryset(queryset, info)
