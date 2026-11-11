@@ -3,12 +3,21 @@ onto the OP-2029 ``validity`` / ``audits`` contract of ``Model.get_queryset``.
 
     showHistory: true          -> audits=ALL
     isDeleted: true            -> validity=DELETED_NOW
-    isDeleted: null (explicit) -> validity=ALL
+    isDeleted: null (explicit) -> validity=ALL   (unreachable from GraphQL with graphql-core 2:
+                                                  no null literal, and a null variable reaches
+                                                  the resolver as an absent argument)
     dateValidFrom__Gte / dateValidTo__Lte
                                -> validity=between(from, to)  (business-validity models only)
 
 A caller passing none of them gets the model's own default, so nothing changes
 for the queries that do not ask (phase 1 rule).
+
+A connection opts in to these arguments with ``**row_filter_arguments()``. Its
+resolver no longer filters validity itself: it maps the arguments the frontend
+already sends (``showHistory``, a ``uuid`` lookup, ...) onto validity / audits
+with ``legacy_row_filters``. Those are defaults: an explicit ``isDeleted`` /
+``showHistory`` overrides them, so the new arguments are available without any
+frontend change being required.
 
 The connection field stores the mapping on the request for the time graphene
 calls ``DjangoObjectType.get_queryset(queryset, info)`` -- which receives no
@@ -21,6 +30,42 @@ from contextlib import contextmanager
 from core.models.row_filters import Audits, Validity
 
 _CONTEXT_ATTR = "_openimis_row_filters"
+_LEGACY_ATTR = "_openimis_legacy_row_filters"
+
+
+def row_filter_arguments():
+    """The connection arguments mapped onto validity / audits, to splat into a field."""
+    import graphene
+
+    return {
+        "show_history": graphene.Boolean(
+            description="Include the audit (history) copies of the rows."),
+        "is_deleted": graphene.Boolean(
+            description="true: deleted rows only; false: live rows only; null: both."),
+    }
+
+
+def legacy_row_filters(info, args, validity=None, audits=None):
+    """Called by a resolver: what its legacy arguments mean as validity / audits.
+
+    graphene runs the resolver before the connection's resolve_queryset, which is
+    where row_filters_in_context reads these back as defaults under the explicit
+    arguments. The resolver must not filter validity itself any more.
+
+    Returns the effective ``{'validity', 'audits'}`` (explicit ``args`` over the
+    defaults), for a resolver that needs the same rows before graphene applies
+    them -- an existence check, say.
+    """
+    rows = {}
+    if validity is not None:
+        rows["validity"] = validity
+    if audits is not None:
+        rows["audits"] = audits
+    context = getattr(info, "context", None)
+    if context is not None:
+        setattr(context, _LEGACY_ATTR, rows)
+    explicit = row_filters_from_args(args)
+    return {k: v for k, v in {**rows, **explicit}.items() if k in ("validity", "audits")}
 
 
 def _arg(args, *names):
@@ -54,7 +99,11 @@ def row_filters_in_context(info, args):
         yield
         return
     previous = getattr(context, _CONTEXT_ATTR, None)
-    setattr(context, _CONTEXT_ATTR, row_filters_from_args(args))
+    # one connection's legacy defaults must not leak into the next field of the request
+    legacy = getattr(context, _LEGACY_ATTR, None) or {}
+    if hasattr(context, _LEGACY_ATTR):
+        delattr(context, _LEGACY_ATTR)
+    setattr(context, _CONTEXT_ATTR, {**legacy, **row_filters_from_args(args)})
     try:
         yield
     finally:

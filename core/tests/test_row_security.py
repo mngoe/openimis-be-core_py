@@ -9,7 +9,8 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.cache import cache
 from django.test import TestCase
 
-from core.gql.row_filter_args import row_filter_kwargs, row_filters_from_args, row_filters_in_context
+from core.gql.row_filter_args import (
+    legacy_row_filters, row_filter_kwargs, row_filters_from_args, row_filters_in_context)
 from core.gql.scoped_object_type import ScopedQuerysetMixin
 from core.models import Audits, Validity, target_queryset
 from core.models.row_security import LocationScope, ParentScope, RowSecurityMixin
@@ -89,6 +90,29 @@ class GraphQLArgumentMappingTest(TestCase):
 
     def test_nothing_asked_maps_to_nothing(self):
         self.assertEqual({}, row_filters_from_args({"first": 10}))
+
+    def test_legacy_defaults_reach_the_model_under_explicit_arguments(self):
+        info = SimpleNamespace(context=SimpleNamespace())
+        model = SimpleNamespace(get_business_validity_fields=lambda: None)
+        # the resolver runs first and states what its legacy arguments mean
+        rows = legacy_row_filters(info, {"showHistory": True}, validity=Validity.ALL, audits=Audits.ALL)
+        self.assertEqual({"validity": Validity.ALL, "audits": Audits.ALL}, rows)
+        with row_filters_in_context(info, {"showHistory": True}):
+            self.assertEqual({"validity": Validity.ALL, "audits": Audits.ALL}, row_filter_kwargs(model, info))
+        # an explicit isDeleted overrides the legacy validity
+        rows = legacy_row_filters(info, {"isDeleted": False}, validity=Validity.ALL)
+        self.assertEqual({"validity": Validity.NOW}, rows)
+        with row_filters_in_context(info, {"isDeleted": False}):
+            self.assertEqual({"validity": Validity.NOW}, row_filter_kwargs(model, info))
+
+    def test_legacy_defaults_do_not_leak_into_the_next_field(self):
+        info = SimpleNamespace(context=SimpleNamespace())
+        model = SimpleNamespace(get_business_validity_fields=lambda: None)
+        legacy_row_filters(info, {}, validity=Validity.ALL)
+        with row_filters_in_context(info, {}):
+            self.assertEqual({"validity": Validity.ALL}, row_filter_kwargs(model, info))
+        with row_filters_in_context(info, {}):
+            self.assertEqual({}, row_filter_kwargs(model, info))
 
     def test_dates_only_reach_business_validity_models(self):
         info = SimpleNamespace(context=SimpleNamespace())
