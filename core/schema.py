@@ -758,7 +758,10 @@ class Query(graphene.ObjectType):
                     officer_villages__validity_to__isnull=True,
                     officer_villages__location__validity_to__isnull=True)
 
-    def resolve_interactive_users(self, info, **kwargs):
+    # graphene looks the resolver up by the attribute name as written: the field is
+    # declared `interactiveUsers`, so a `resolve_interactive_users` was never called and
+    # the connection ran unchecked (no right, deleted users and history copies included)
+    def resolve_interactiveUsers(self, info, **kwargs):
         if not info.context.user.has_perms(CoreConfig.gql_query_users_perms):
             raise PermissionError("Unauthorized")
         filters = []
@@ -768,9 +771,19 @@ class Query(graphene.ObjectType):
         if client_mutation_id:
             filters.append(Q(mutations__mutation__client_mutation_id=client_mutation_id))
 
+        # validity / audits are applied by InteractiveUser.get_queryset (OP-2029)
         show_history = kwargs.get('show_history', False)
-        if not show_history and not kwargs.get('uuid', None):
+        if kwargs.get('validity') is not None and not show_history:
+            # "as of date": not expressible for a non-business model, kept here; the
+            # model is told not to filter again
             filters += filter_validity(**kwargs)
+            legacy_row_filters(info, kwargs, validity=Validity.ALL, audits=Audits.ALL)
+        else:
+            # showHistory or a uuid lookup -> every row, live users otherwise
+            legacy_row_filters(
+                info, kwargs,
+                validity=Validity.ALL if show_history or kwargs.get('uuid') else Validity.NOW,
+                audits=Audits.ALL if show_history else None)
 
         return gql_optimizer.query(query.filter(*filters), info)
 

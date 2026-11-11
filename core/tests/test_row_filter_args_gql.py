@@ -54,3 +54,50 @@ class CoreRowFilterArgsTest(openIMISGraphQLTestCase):
     def test_enrolment_officers_default_hides_deleted(self):
         self.assertEqual(["RFACEO1"], self._values("enrolmentOfficers", 'str: "RFACEO"', "code"))
         self.assertEqual(["RFACEO2"], self._values("enrolmentOfficers", 'str: "RFACEO", isDeleted: true', "code"))
+
+
+class InteractiveUsersResolverTest(openIMISGraphQLTestCase):
+    """interactiveUsers runs its resolver (it used to be skipped: wrong method name).
+
+    The field is declared `interactiveUsers`; graphene looks up
+    `resolve_interactiveUsers`, so `resolve_interactive_users` was never called:
+    no right was checked and deleted users and history copies were listed.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from core.models import InteractiveUser
+        cls.admin = create_test_interactive_user(username="iuRowArgsAdmin")
+        cls.token = get_token(cls.admin, DummyContext(user=cls.admin))
+        no_right = create_test_interactive_user(
+            username="iuRowArgsNoRight", roles=[create_test_role(name="iuRowArgs-no-right").id])
+        cls.no_right_token = get_token(no_right, DummyContext(user=no_right))
+        create_test_interactive_user(username="iuRowArgsLive", custom_props={"last_name": "RfaIuser"})
+        deleted = create_test_interactive_user(username="iuRowArgsDeleted", custom_props={"last_name": "RfaIuser"})
+        InteractiveUser.objects.filter(id=deleted.i_user.id).update(validity_to="2020-01-01")
+
+    def _query(self, args, token=None):
+        return self.query(
+            '{ interactiveUsers(lastName_Icontains: "RfaIuser"%s) { edges { node { loginName } } } }' % args,
+            headers={"HTTP_AUTHORIZATION": f"Bearer {token or self.token}"})
+
+    def _logins(self, args=""):
+        response = self._query(args)
+        self.assertResponseNoErrors(response)
+        edges = json.loads(response.content)["data"]["interactiveUsers"]["edges"]
+        return sorted(e["node"]["loginName"] for e in edges)
+
+    def test_the_users_right_is_checked(self):
+        content = json.loads(self._query("", self.no_right_token).content)
+        self.assertTrue(content.get("errors"))
+        self.assertIsNone((content.get("data") or {}).get("interactiveUsers"))
+
+    def test_default_hides_deleted_users(self):
+        self.assertEqual(["iuRowArgsLive"], self._logins())
+
+    def test_show_history_keeps_its_legacy_meaning(self):
+        self.assertEqual(["iuRowArgsDeleted", "iuRowArgsLive"], self._logins(", showHistory: true"))
+
+    def test_is_deleted(self):
+        self.assertEqual(["iuRowArgsDeleted"], self._logins(", isDeleted: true"))
