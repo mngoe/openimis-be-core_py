@@ -780,9 +780,11 @@ def get_first_or_default_language():
         return Language.objects.first()
 
 
-def insert_role_right_for_system(system_role, right_id):
-    RoleRight = apps.get_model("core", "RoleRight")
-    Role = apps.get_model("core", "Role")
+def insert_role_right_for_system(system_role, right_id, migration_apps=None):
+    # `migration_apps`: the historical apps a migration passes (openIMIS core signature)
+    registry = migration_apps or apps
+    RoleRight = registry.get_model("core", "RoleRight")
+    Role = registry.get_model("core", "Role")
     existing_role = Role.objects.filter(is_system=system_role, validity_to__isnull=True).first()
     if not existing_role:
         logger.warning("Migration requested a role_right for system role %s but couldn't find that role", system_role)
@@ -794,9 +796,11 @@ def insert_role_right_for_system(system_role, right_id):
         return role_right
 
 
-def remove_role_right_for_system(system_role, right_id):
-    RoleRight = apps.get_model("core", "RoleRight")
-    Role = apps.get_model("core", "Role")
+def remove_role_right_for_system(system_role, right_id, migration_apps=None):
+    # `migration_apps`: the historical apps a migration passes (openIMIS core signature)
+    registry = migration_apps or apps
+    RoleRight = registry.get_model("core", "RoleRight")
+    Role = registry.get_model("core", "Role")
     existing_role = Role.objects.filter(is_system=system_role, validity_to__isnull=True).first()
     if not existing_role:
         logger.warning("Migration requested to remove a role_right for system role %s but couldn't find that role",
