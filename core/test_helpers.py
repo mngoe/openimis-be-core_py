@@ -440,3 +440,56 @@ def assert_row_filters(test, model, queryset, user, live, deleted, default_hides
     test.assertEqual({live}, pks(validity=Validity.NOW))
     test.assertEqual({deleted}, pks(validity=Validity.DELETED_NOW))
     test.assertEqual({live, deleted}, pks(validity=Validity.ALL))
+
+
+class LogInHelper:
+    """Ported from openIMIS core (used by the modules' develop tests)."""
+    def __init__(self):
+        self.test_user_name = "Admin"
+        self.test_user_password = "TestPasswordTest2@"
+        self.test_data_user = {
+            "username": self.test_user_name,
+            "last_name": self.test_user_name,
+            "password": self.test_user_password,
+            "other_names": self.test_user_name,
+            "user_types": "INTERACTIVE",
+            "language": "en"
+        }
+
+    def get_or_create_user_api(self, **kwargs):
+        return create_test_interactive_user(**kwargs)
+
+
+def create_clerk_role():
+    """The Clerk role: the rights of an enrolment officer (ported from openIMIS core)."""
+    clerk_perms = [
+        "gql_query_locations_perms",
+        "gql_query_families_perms",
+        "gql_mutation_create_families_perms",
+        "gql_mutation_update_families_perms",
+        "gql_mutation_delete_families_perms",
+        "gql_query_insurees_perms",
+        "gql_mutation_create_insurees_perms",
+        "gql_mutation_update_insurees_perms",
+        "gql_mutation_delete_insurees_perms",
+        "gql_query_insuree_inquire_perms",
+        "gql_query_policies_perms",
+        "gql_mutation_create_policies_perms",
+        "gql_mutation_edit_policies_perms",
+        "gql_mutation_delete_policies_perms",
+        "gql_mutation_renew_policies_perms",
+        "gql_query_premiums_perms",
+        "gql_mutation_create_premiums_perms",
+        "gql_mutation_update_premiums_perms",
+        "gql_mutation_delete_premiums_perms",
+        "gql_query_claims_perms",
+        "gql_mutation_deliver_claim_feedback_perms",
+    ]
+    # Cameroon does not declare every right of openIMIS core (insuree_inquire...): only
+    # the ones the installed modules declare are given
+    from core.utils import collect_all_gql_permissions
+    declared = set()
+    for app_perms in collect_all_gql_permissions().values():
+        declared.update(app_perms)
+    return get_or_create_test_role(
+        perm_names=[perm for perm in clerk_perms if perm in declared], name="Clerk", is_system=8)

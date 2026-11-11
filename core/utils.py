@@ -967,3 +967,12 @@ def to_list_permissions():
             for perm_id in perm_ids:
                 all_perms.add(int(perm_id))
     return sorted(list(all_perms))
+
+
+def to_json_safe_value(value):
+    """`value` if JSON can serialise it, else its string (ported from openIMIS core)."""
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        return str(value)
