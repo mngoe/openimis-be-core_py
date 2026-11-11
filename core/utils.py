@@ -35,12 +35,30 @@ def get_current_user():
 
 
 def set_current_user(user):
+    # called once per authenticated request and per async mutation task: a new
+    # request scope, so the cache memo of the previous one must not leak into it
+    clear_access_cache()
     _request_local.user = user
 
 
 def clear_current_user():
     if hasattr(_request_local, "user"):
         del _request_local.user
+    clear_access_cache()
+
+
+def get_cache_memo():
+    """Stands in for a cache that cannot be trusted across requests (core.cache_control)."""
+    memo = getattr(_request_local, "cache_memo", None)
+    if memo is None:
+        memo = {}
+        _request_local.cache_memo = memo
+    return memo
+
+
+def clear_access_cache():
+    if hasattr(_request_local, "cache_memo"):
+        del _request_local.cache_memo
 
 __all__ = [
     "TimeUtils",

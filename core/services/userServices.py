@@ -8,7 +8,6 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.mail import send_mail, BadHeaderError
 from django.template import loader
 from django.utils.http import urlencode
-from django.core.cache import cache
 
 from django.contrib.auth import authenticate
 from rest_framework import exceptions
@@ -115,7 +114,16 @@ def create_or_update_user_districts(i_user, district_ids, audit_user_id):
             location_id=district_id,
             defaults={"validity_to": None, "audit_user_id": audit_user_id},
         )
-    cache.delete('q_allowed_locations_'+str(i_user.id))
+    # bulk update() sends no post_save: free the user's cached districts here
+    free_location_cache_for_user(i_user.id)
+
+
+def free_location_cache_for_user(user_id):
+    try:
+        from location.models import free_cache_for_user_now_and_on_commit
+    except ImportError:  # location not installed, or too old to cache per user
+        return
+    free_cache_for_user_now_and_on_commit(user_id)
 
 
 
