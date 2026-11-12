@@ -1231,8 +1231,8 @@ def duplicate_role(data, user):
     [setattr(duplicated_role, k, v) for k, v in data.items()]
     duplicated_role.save()
     for uba, bag in ((False, rights_id), (True, uba_rights_id)):
-        if bag:
-            # reset the bag with the rights passed to the mutation
+        if bag is not None:
+            # reset the bag with the rights passed to the mutation (an empty list: no rights)
             role_rights_currently_assigned = RoleRight.objects.filter(
                 role_id=role.id, uba=uba, validity_to__isnull=True).values_list('right_id', flat=True)
             for right_id in bag:

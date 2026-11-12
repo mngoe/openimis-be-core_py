@@ -101,10 +101,10 @@ class AbsStrategy(object, metaclass=abc.ABCMeta):
     @classmethod
     def ready(cls):
         now = datetime.datetime.now()
+        # no start date: valid from the beginning; no end date: valid for ever
         condition_is_valid = (
-            (now >= cls.date_valid_from and now <= cls.date_valid_to)
-            if cls.date_valid_to
-            else (now >= cls.date_valid_from and cls.date_valid_to is None)
+            (cls.date_valid_from is None or now >= cls.date_valid_from)
+            and (cls.date_valid_to is None or now <= cls.date_valid_to)
         )
         if not condition_is_valid:
             cls.status = "inactive"

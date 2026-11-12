@@ -175,7 +175,7 @@ class BaseDeleteMutationMixin(TargetLookupMixin):
             raise ValidationError("mutation.authentication_required")
 
     @classmethod
-    def _mutate(cls, user=None, uuid=None, **data):
+    def _mutate(cls, user, uuid=None, **data):
         object_to_delete = cls._target_queryset(user).filter(uuid=uuid).first()
 
         if object_to_delete is None:

@@ -106,7 +106,7 @@ class ClaimAdminDerivedFromBusinessAccessTest(TestCase):
         cls.other_hf = create_test_health_facility("UBACA2", cls.village.parent.parent_id)
 
     def setUp(self):
-        self.user = create_test_interactive_user(username="ubacauser")
+        self.user = create_test_interactive_user(username="ubacausr")  # the claim admin code: 8 characters at most
 
     def _grant(self, *health_facilities):
         create_or_update_user_business_accesses(
@@ -167,7 +167,7 @@ class OfficerVillagesDerivedFromBusinessAccessTest(TestCase):
         cls.other_village = create_test_village(custom_props={"name": "UbaEoVillage2"})
 
     def setUp(self):
-        self.user = create_test_interactive_user(username="ubaeouser")
+        self.user = create_test_interactive_user(username="ubaeousr")  # the officer code: 8 characters at most
 
     def _grant(self, *villages):
         create_or_update_user_business_accesses(

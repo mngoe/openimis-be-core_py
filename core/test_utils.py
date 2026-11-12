@@ -46,6 +46,9 @@ class UtilsTestCase(TestCase):
 
     def test_cache_invalidation(self):
         User.USE_CACHE = True
+        # restored even when an assertion fails: left on, every later test reads users from the cache
+        self.addCleanup(caches["default"].clear)
+        self.addCleanup(setattr, User, "USE_CACHE", False)
         users = list(User.objects.all())
         users_id = [user.id for user in users]
         users_0_no_cache_get = User.objects.get(id=users_id[0])
@@ -67,9 +70,10 @@ class UtilsTestCase(TestCase):
             users_0_filter.username,
             "the object should be different, cache not invalidated properly",
         )
+        # the cached users come first: same users, not necessarily the same order
         self.assertEquals(
-            users,
-            users_filter,
+            sorted(users, key=lambda user: str(user.id)),
+            sorted(users_filter, key=lambda user: str(user.id)),
             "should be the same list even if user_filter comes partially from cache",
         )
         caches["default"].clear()

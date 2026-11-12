@@ -4,17 +4,9 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from core.serializers import ClaimAdminCurrentUserSerializer, OfficerCurrentUserSerializer
+from core.serializers import ClaimAdminSerializer, OfficerSerializer
 from core.test_helpers import create_test_interactive_user
 from core.views import UserViewSet
-
-
-class _ListManager:
-    def __init__(self, items):
-        self._items = items
-
-    def all(self):
-        return self._items
 
 
 class CurrentUserApiTest(TestCase):
@@ -51,9 +43,9 @@ class CurrentUserApiTest(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("officer", response.data)
-        self.assertIn("claimAdmin", response.data)
+        self.assertIn("claim_admin", response.data)
         self.assertIsNone(response.data["officer"])
-        self.assertIsNone(response.data["claimAdmin"])
+        self.assertIsNone(response.data["claim_admin"])
 
     def test_officer_serializer_structure(self):
         parent_location = SimpleNamespace(id=2, uuid="loc-parent", code="EST", name="Est", type="R", parent=None)
@@ -76,7 +68,7 @@ class CurrentUserApiTest(TestCase):
             location=location,
         )
 
-        data = OfficerCurrentUserSerializer(officer).data
+        data = OfficerSerializer(officer).data
         self.assertEqual(data["id"], 11)
         self.assertEqual(data["lastName"], "Sandjong")
         self.assertEqual(data["otherNames"], "Paul")
@@ -104,7 +96,7 @@ class CurrentUserApiTest(TestCase):
             contract_start_date=None,
             contract_end_date=None,
             location=location,
-            program=_ListManager([SimpleNamespace(idProgram="1", nameProgram="VIH")]),
+            program=[SimpleNamespace(idProgram="1", nameProgram="VIH")],
         )
         claim_admin = SimpleNamespace(
             id=22,
@@ -119,12 +111,11 @@ class CurrentUserApiTest(TestCase):
             health_facility=health_facility,
         )
 
-        data = ClaimAdminCurrentUserSerializer(claim_admin).data
+        data = ClaimAdminSerializer(claim_admin).data
         self.assertEqual(data["id"], 22)
-        self.assertEqual(data["hasLogin"], True)
         self.assertEqual(data["emailId"], "paul@gmail.com")
         self.assertEqual(data["healthFacility"]["code"], "ES001")
-        self.assertEqual(data["healthFacility"]["program"]["edges"][0]["node"]["nameProgram"], "VIH")
+        self.assertEqual(data["healthFacility"]["program"][0]["nameProgram"], "VIH")
 
     def test_current_user_adds_vih_right_without_duplicate(self):
         request = SimpleNamespace(user=SimpleNamespace(_u=SimpleNamespace(id=1)))

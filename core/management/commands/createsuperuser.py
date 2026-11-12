@@ -25,7 +25,8 @@ class Command(DjangoCommand):
             password2 = getpass.getpass("Password (again): ")
             if password != password2:
                 raise CommandError("Your passwords didn't match.")
-            if not password.strip():
-                raise CommandError("Blank passwords aren't allowed.")
+        if not password.strip():
+            # from the environment too: a value made of spaces is no password
+            raise CommandError("Blank passwords aren't allowed.")
         os.environ["DJANGO_SUPERUSER_PASSWORD"] = password
         return super().handle(*args, **options)

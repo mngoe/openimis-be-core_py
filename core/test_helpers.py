@@ -9,7 +9,6 @@ from core.services import create_or_update_user_roles
 from location.models import Location
 from  uuid import uuid4
 import json
-import time
 
 def create_test_officer(valid=True, custom_props={}, villages = []):
 
@@ -259,6 +258,10 @@ def create_test_interactive_user(username='TestInteractiveTest', password="Test1
             )
     if not user:
         user = User.objects.create(username=username, i_user=i_user)
+    elif user.i_user_id != i_user.id:
+        # a User kept without its interactive user: link the one found or created
+        user.i_user = i_user
+        user.save()
     i_user.set_password(password)
     i_user.save()
     create_or_update_user_roles(i_user, roles, None)

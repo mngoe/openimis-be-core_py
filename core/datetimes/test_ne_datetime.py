@@ -170,6 +170,14 @@ class NeDatetimeTestCase(TestCase):
         core.datetime = importlib.import_module(
             '.datetimes.ne_datetime', 'core')
 
+    def tearDown(self):
+        # back to the AD calendar: left on Nepali, every later test saves NeDatetime values
+        core.calendar = importlib.import_module(
+            '.calendars.ad_calendar', 'core')
+        core.datetime = importlib.import_module(
+            '.datetimes.ad_datetime', 'core')
+        super().tearDown()
+
     def test_from_ad_date(self):
         ad_dt = py_date(2020, 1, 13)
         ne_dt = core.datetime.datetime.from_ad_date(ad_dt)

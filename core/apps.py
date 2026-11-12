@@ -342,19 +342,14 @@ class CoreConfig(AppConfig):
         # in the location tree, which is what the row filter needs. Core keeps the codes so
         # that a module can name a credential without depending on location.
 
-        # Connects the post_save/post_delete receivers invalidating the rights caches.
-        # TODO: remove this import once the assembly is upgraded past 24.04. Newer
-        # openimis-be_py ships a `receiver_binding` app (installed after
-        # `signal_binding`, so that service signals are all bound before any receiver
-        # loads) which imports `<module>.receivers` itself, making this import a
-        # duplicate registration risk. The receivers use an explicit `dispatch_uid`,
-        # so a double load is currently idempotent.
         # django.contrib.auth is earlier in INSTALLED_APPS, and Django keeps the command
         # from the earliest app, so core's createsuperuser would lose. Prefer it: that
         # command is what also creates the interactive user.
         import django.core.management as management
 
-        _django_get_commands = management.get_commands.__wrapped__
+        # Django caches get_commands with lru_cache: call the function under the cache,
+        # or the function itself should a Django version drop that cache.
+        _django_get_commands = getattr(management.get_commands, "__wrapped__", management.get_commands)
 
         @lru_cache(maxsize=None)
         def get_commands():
@@ -364,6 +359,13 @@ class CoreConfig(AppConfig):
 
         management.get_commands = get_commands
 
+        # Connects the post_save/post_delete receivers invalidating the rights caches.
+        # TODO: remove this import once the assembly is upgraded past 24.04. Newer
+        # openimis-be_py ships a `receiver_binding` app (installed after
+        # `signal_binding`, so that service signals are all bound before any receiver
+        # loads) which imports `<module>.receivers` itself, making this import a
+        # duplicate registration risk. The receivers use an explicit `dispatch_uid`,
+        # so a double load is currently idempotent.
         from core import receivers  # noqa: F401
 
         # The scheduler starts as soon as it gets a job, which could be before Django is ready, so we enable it here

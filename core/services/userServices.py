@@ -245,7 +245,10 @@ def _business_object_pk(model_label, object_ref):
     if any(f.name == "validity_to" for f in model._meta.fields):
         queryset = queryset.filter(validity_to__isnull=True)
     if any(f.name == "uuid" for f in model._meta.fields):
-        pk = queryset.filter(uuid=object_ref).values_list("pk", flat=True).first()
+        try:
+            pk = queryset.filter(uuid=object_ref).values_list("pk", flat=True).first()
+        except (ValidationError, ValueError, TypeError):
+            pk = None  # not a uuid: try it as a primary key below
         if pk is not None:
             return pk
     try:

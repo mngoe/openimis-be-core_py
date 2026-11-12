@@ -59,8 +59,9 @@ class UserViewSet(viewsets.ModelViewSet):
         user_id = request.user._u.id
         programs = program_models.Program.objects.filter(user__id=user_id).filter(
             nameProgram="VIH")
-        if programs:
-            serializer.data['i_user']['rights'].append(10119)
+        rights = serializer.data['i_user']['rights']
+        if programs and 10119 not in rights:
+            rights.append(10119)
         return Response(serializer.data)
 
 
