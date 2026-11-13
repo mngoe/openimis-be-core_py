@@ -30,6 +30,7 @@ It is a required module of [openimis-be_py](https://github.com/openimis/openimis
 * core_User > User: aggregate entity to bridge Django security on either InteractiveUser (i_user) or TechnicalUser (t_user)
 * core_User_groups > UserGroup: bridge of custom User model to Django permission model
 * core_Mutation_Log > MutationLog: the generic audit/tracking of any GraphQL mutation (payload as json)
+* core_userbusinessaccess > UserBusinessAccess: "this user acts on that business object", under a registered credential (`link_type`). Generalises the dedicated associations (claim admin -> health facility, OfficerVillage, ...). Carries no right: rights stay on RoleRight, the ones flagged `uba` being granted only where the user holds a link. See [docs/uba.md](docs/uba.md)
 
 
 ## Listened Django Signals
@@ -42,6 +43,8 @@ None
 * role_right
 * modules_permissions
 * languages
+* user_business_access
+* uba_link_types: the credentials a user may hold on a business object, from the module registry (see [docs/uba.md](docs/uba.md))
 
 ## GraphQL Mutations
 * createRole

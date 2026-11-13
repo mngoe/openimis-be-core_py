@@ -29,6 +29,7 @@ setup(
         'django-dirtyfields',
         'websocket-client',
         'jsonschema',
+        'uuid6',
     ],
     classifiers=[
         'Environment :: Web Environment',

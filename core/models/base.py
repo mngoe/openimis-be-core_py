@@ -20,6 +20,8 @@ from django.dispatch import receiver
 
 from ..fields import DateTimeField
 from ..utils import filter_validity
+from .row_security import RowSecurityMixin
+
 from django.core.cache import caches
 from django.conf import settings
 cache = caches["default"]
@@ -27,14 +29,14 @@ cache = caches["default"]
 logger = logging.getLogger(__name__)
 
 
-class ExtendableModel(models.Model):
+class ExtendableModel(RowSecurityMixin, models.Model):
     json_ext = JSONField(
         db_column='JsonExt', blank=True, null=True)
 
     class Meta:
         abstract = True
 
-class UUIDModel(models.Model):
+class UUIDModel(RowSecurityMixin, models.Model):
     """
     Abstract entity, parent of all (new) openIMIS entities.
     Enforces the UUID identifier.

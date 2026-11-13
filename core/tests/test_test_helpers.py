@@ -1,6 +1,6 @@
 from django.test import TestCase
 from core.services.userServices import create_or_update_interactive_user, create_or_update_core_user
-from core.test_helpers import create_test_officer
+from core.test_helpers import create_test_officer, create_test_role
 import re
 from core.models import InteractiveUser
 # Create your tests here.
@@ -20,11 +20,13 @@ class HelpersTest(TestCase):
     "other_names": _TEST_USER_NAME,
     "user_types": "INTERACTIVE",
     "language": "en",
-    "roles": [1, 3, 5, 9],
+    "roles": [1],  # completed in setUpTestData: roles 3, 5 and 9 exist in the demo DB only
     }
     @classmethod
     def setUpTestData(cls):
         cls.test_officer = create_test_officer(valid=True, custom_props={})
+        cls._TEST_DATA_USER = {**cls._TEST_DATA_USER, "roles": [1] + [
+            create_test_role(name=f"HelpersTestRole{i}").id for i in range(3)]}
         cls.i_user, i_user_created = create_or_update_interactive_user(user_id=None, data=cls._TEST_DATA_USER, audit_user_id=999, connected=False)
         cls.user, user_created = create_or_update_core_user(None, cls.i_user.username, i_user=cls.i_user)
 

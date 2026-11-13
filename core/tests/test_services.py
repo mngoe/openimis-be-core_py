@@ -16,7 +16,8 @@ from core.services import (
     set_user_password,
 )
 from django.test import TestCase
-from location.models import OfficerVillage
+from location.models import Location, OfficerVillage
+from location.test_helpers import create_test_location
 
 logger = logging.getLogger(__file__)
 postgresql = "postgresql"
@@ -349,7 +350,8 @@ class UserServicesTest(TestCase):
                 dob="1999-01-01",
                 phone="+00000",
                 email="imis@bar.be",
-                location_id=17,
+                # a district of the test itself: location 17 exists in the demo DB only
+                location_id=create_test_location("D", custom_props={"code": "TSVD17", "name": "Officer update district"}).id,
                 village_ids=[22],
                 substitution_officer_id=None,
                 works_to=datetime.date(2025,5,5),
@@ -367,10 +369,11 @@ class UserServicesTest(TestCase):
         self.assertEquals(officer2.audit_user_id, 111)
         self.assertTrue(officer2.has_login)
         self.assertFalse(officer2.phone_communication)
-        self.assertEquals(officer2.location_id, 17)
+        self.assertEquals(officer2.location_id, Location.objects.get(code="TSVD17", validity_to__isnull=True).id)
         self.assertIsNone(officer2.substitution_officer_id)
         self.assertEquals(officer2.address, "updated address")
-        self.assertEquals(str(officer2.works_to.date()), "2025-05-05")
+        # given as a date, works_to comes back as a date, not a datetime
+        self.assertEquals(str(officer2.works_to)[:10], "2025-05-05")
         self.assertEquals(
             list(
                 OfficerVillage.objects.filter(

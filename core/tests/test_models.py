@@ -1,10 +1,9 @@
 from django.test import TestCase
-from .models import User, TechnicalUser, InteractiveUser
+from core.models import User, TechnicalUser, InteractiveUser
 import json
 import os
 from datetime import datetime as py_datetime, timedelta
 from unittest import mock
-from django.test import TestCase
 from core.models import ModuleConfiguration
 from core import datetimedelta
 

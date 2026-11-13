@@ -117,6 +117,9 @@ class InteractiveUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = InteractiveUser
+        # `rights` is the global bag only, `uba_rights` the rights granted solely on the
+        # business objects the user holds a UserBusinessAccess link on. The two are
+        # disjoint, a client needing the union has to merge them itself.
         fields = (
             "id",
             "language",
@@ -124,6 +127,7 @@ class InteractiveUserSerializer(serializers.ModelSerializer):
             "other_names",
             "health_facility_id",
             "rights",
+            "uba_rights",
             "email",
             "phone",
             "roles",

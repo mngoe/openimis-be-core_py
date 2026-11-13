@@ -1,29 +1,64 @@
 import uuid
 import json
 from importlib import import_module
-from typing import Dict, Any
+from typing import Type, Dict, Any
 
 import jsonschema
 
 import core
 import ast
 import graphene
-from django.db import models
 from django.apps import AppConfig
 from django.conf import settings
 from django.http import FileResponse
-from django.db.models import Q, ForeignKey, ManyToOneRel,ManyToManyRel, ManyToManyField
+from django.db import models
+from django.db.models import ForeignKey, Func, Q, UUIDField
+from django.utils.translation import gettext as _
 import logging
+import threading
 from django.apps import apps
-from django.core.exceptions import PermissionDenied, ValidationError, FieldDoesNotExist
-from django.core.files.storage import default_storage
 from django.core.cache import caches
 from functools import lru_cache
-import threading
+from django.core.exceptions import FieldDoesNotExist, PermissionDenied, ValidationError
+from django.core.files.storage import default_storage
+from uuid6 import uuid7 as uuidv7  # noqa: F401
 
 logger = logging.getLogger(__file__)
 
 cache = caches["default"]
+
+_request_local = threading.local()
+
+
+def get_current_user():
+    return getattr(_request_local, "user", None)
+
+
+def set_current_user(user):
+    # called once per authenticated request and per async mutation task: a new
+    # request scope, so the cache memo of the previous one must not leak into it
+    clear_access_cache()
+    _request_local.user = user
+
+
+def clear_current_user():
+    if hasattr(_request_local, "user"):
+        del _request_local.user
+    clear_access_cache()
+
+
+def get_cache_memo():
+    """Stands in for a cache that cannot be trusted across requests (core.cache_control)."""
+    memo = getattr(_request_local, "cache_memo", None)
+    if memo is None:
+        memo = {}
+        _request_local.cache_memo = memo
+    return memo
+
+
+def clear_access_cache():
+    if hasattr(_request_local, "cache_memo"):
+        del _request_local.cache_memo
 
 __all__ = [
     "TimeUtils",
@@ -40,19 +75,17 @@ __all__ = [
     "ExtendedConnection",
     "get_scheduler_method_ref",
     "ExtendedRelayConnection",
+    "CachedManager",
+    "CachedModelMixin",
+    "GenerateUUIDv7",
+    "RandomUUID",
+    "clean_fk",
+    "clear_cache",
+    "get_cache_key",
+    "get_cached_foreign_key",
+    "uuidv7",
 ]
 
-_request_local = threading.local()
-
-def get_current_user():
-    return getattr(_request_local, "user", None)
-
-def set_current_user(user):
-    _request_local.user = user
-
-def clear_current_user():
-    if hasattr(_request_local, "user"):
-        del _request_local.user
 
 class TimeUtils(object):
 
@@ -218,8 +251,16 @@ def patient_category_mask(insuree, target_date):
     return mask
 
 
+def clear_cache(instance):
+    cache.delete(get_cache_key(instance.__class__, instance.pk))
+
+
+def get_cache_key(model, id):
+    return f"cs_{model.__name__}_{str(id).lower()}"
+
+
 class CachedManager(models.Manager):
-    UNIQUE_FIELDS = {'pk', 'id', 'uuid'}
+    UNIQUE_FIELDS = {"pk", "id", "uuid"}
     CACHED_FK = {}
 
     def get(self, *args, **kwargs):
@@ -229,25 +270,23 @@ class CachedManager(models.Manager):
         """
         if not getattr(self.model, "USE_CACHE", False):
             return super().get(*args, **kwargs)
-
         is_simple, key, value, field, lookup = self._is_simple_lookup(args, kwargs)
 
         if is_simple and lookup == "exact":
             # Try cache lookup for exact queries
             cache_result = self._handle_cache_lookup(field, value, lookup)
             if cache_result is not None:
-                cached_qs = cache_result
-
-                objects = list(cached_qs)
-
-                for obj in objects:
-                    if str(obj.uuid) == str(value):
+                requested = str(self._normalize_value(value)).lower()
+                for obj in list(cache_result):
+                    # a stale or colliding entry must not return another object (dev-csu cache fix)
+                    if str(self._normalize_value(getattr(obj, field, None))).lower() == requested:
                         logger.debug(
                             "Cache hit for get() with key: %s",
-                            get_cache_key(self.model, self._normalize_value(value))
+                            get_cache_key(self.model, self._normalize_value(value)),
                         )
                         return obj
 
+        # Fallback to default get() for non-simple queries or cache miss
         instance = super().get(*args, **kwargs)
 
         # Cache the instance for future lookups
@@ -256,8 +295,8 @@ class CachedManager(models.Manager):
 
     def _normalize_value(self, value):
         """Normalize value for cache key."""
-        if isinstance(value, uuid.UUID):
-            return str(value)
+        if isinstance(value, (str, uuid.UUID)):
+            return str(value).lower()
         try:
             return int(value)
         except (ValueError, TypeError):
@@ -267,15 +306,27 @@ class CachedManager(models.Manager):
         """Check if query is a single exact or in lookup on unique fields."""
         if kwargs and len(kwargs) == 1:
             key = list(kwargs.keys())[0]
-            field = key.split('__')[0] if '__' in key else key
-            lookup = key.split('__')[-1] if '__' in key else 'exact'
-            return field in self.UNIQUE_FIELDS and lookup in {'exact', 'in'}, key, kwargs.get(key), field, lookup
+            field = key.split("__")[0] if "__" in key else key
+            lookup = key.split("__")[-1] if "__" in key else "exact"
+            return (
+                field in self.UNIQUE_FIELDS and lookup in {"exact", "in"},
+                key,
+                kwargs.get(key),
+                field,
+                lookup,
+            )
         elif args and len(args) == 1 and isinstance(args[0], Q):
             if len(args[0].children) == 1 and isinstance(args[0].children[0], tuple):
                 field, value = args[0].children[0]
-                lookup = field.split('__')[-1] if '__' in field else 'exact'
-                field = field.split('__')[0]
-                return field in self.UNIQUE_FIELDS and lookup in {'exact', 'in'}, field, value, field, lookup
+                lookup = field.split("__")[-1] if "__" in field else "exact"
+                field = field.split("__")[0]
+                return (
+                    field in self.UNIQUE_FIELDS and lookup in {"exact", "in"},
+                    field,
+                    value,
+                    field,
+                    lookup,
+                )
             else:
                 logger.debug("Complex Q object detected: %s", args[0].children)
         return False, None, None, None, None
@@ -287,7 +338,7 @@ class CachedManager(models.Manager):
         qs = self.get_queryset().filter(pk__in=[instance.pk for instance in instances])
         if ordered:
             qs = qs.order_by("pk")
-            qs._result_cache = sorted(instances,key=lambda instance: instance.pk)
+            qs._result_cache = sorted(instances, key=lambda instance: instance.pk)
         else:
             qs._result_cache = list(instances)
         return qs
@@ -295,28 +346,33 @@ class CachedManager(models.Manager):
     # In CachedManager, update _handle_cache_lookup for 'exact' (similar changes for 'in' below)
     def _handle_cache_lookup(self, field, value, lookup):
         """Handle cache lookup for exact or in queries."""
-        if lookup == 'exact':
+        if lookup == "exact":
             cache_key = get_cache_key(self.model, self._normalize_value(value))
             cached_data = cache.get(cache_key)
             if cached_data:
                 if isinstance(cached_data, dict):
                     # Instantiate from dict to ensure proper __init__ and dirtyfields state
                     cached_instance = self.model(**cached_data)
-                    cached_instance._state.adding = False  # Mark as not new (DB-loaded simulation)
-                    if hasattr(cached_instance, '_state'):
-                        cached_instance._state.db = 'default'  # Optional: Set DB alias if needed
+                    cached_instance._state.adding = (
+                        False  # Mark as not new (DB-loaded simulation)
+                    )
+                    if hasattr(cached_instance, "_state"):
+                        cached_instance._state.db = (
+                            "default"  # Optional: Set DB alias if needed
+                        )
+
                     for fk in self.CACHED_FK:
                         get_cached_foreign_key(cached_instance, fk)
                     logger.debug("Cache hit for key: %s", cache_key)
                     return self._instances_to_queryset([cached_instance], True)
                 elif isinstance(cached_data, (uuid.UUID, str, int)):
-                    return self._handle_cache_lookup('pk', cached_data, lookup)
+                    return self._handle_cache_lookup("pk", cached_data, lookup)
                 else:
                     logger.error("Wrong type in cache for key: %s", cache_key)
                     return None
             return None
 
-        if lookup == 'in':
+        if lookup == "in":
             if not isinstance(value, (list, tuple, set)):
                 return None
             values = [self._normalize_value(v) for v in value]
@@ -331,14 +387,16 @@ class CachedManager(models.Manager):
                     if isinstance(data, dict):
                         instance = self.model(**data)
                         instance._state.adding = False
-                        if hasattr(instance, '_state'):
-                            instance._state.db = 'default'
+                        if hasattr(instance, "_state"):
+                            instance._state.db = "default"
                         for fk in self.CACHED_FK:
                             get_cached_foreign_key(instance, fk)
                         cached_instances.append(instance)
                         logger.debug("Cache hit for key: %s", ck)
                     elif isinstance(data, (uuid.UUID, str, int)):
-                        cache_result = self._handle_cache_lookup('pk', data, 'exact')  # Note: Use 'exact' for recursion
+                        cache_result = self._handle_cache_lookup(
+                            "pk", data, "exact"
+                        )  # Note: Use 'exact' for recursion
                         if cache_result:
                             cached_instances.extend(cache_result._result_cache)
                             logger.debug("Cache hit for key: %s", ck)
@@ -357,13 +415,12 @@ class CachedManager(models.Manager):
 
         return None
 
-
     def filter(self, *args, **kwargs):
         """
         Overrides filter() to use cache for single exact or in lookups on pk, id, or uuid.
         Returns a QuerySet to support chaining without unnecessary DB queries.
         """
-        if getattr(self.model, 'USE_CACHE', False):
+        if getattr(self.model, "USE_CACHE", False):
             is_simple, key, value, field, lookup = self._is_simple_lookup(args, kwargs)
         else:
             is_simple = False
@@ -376,22 +433,15 @@ class CachedManager(models.Manager):
             # Fallback to default filter for invalid lookups or cache miss
             return super().filter(*args, **kwargs)
 
-        if lookup == 'exact':
-            cached_qs = cache_result
-            if cached_qs is not None:
-                return cached_qs
-            # Cache miss, query DB and cache
-            qs = super().filter(*args, **kwargs)
-            if qs.exists():
-                instance = qs.first()
-                instance.update_cache()
-            return qs
+        if lookup == "exact":
+            return cache_result
 
         # Handle in lookup
         cached_qs, uncached_values, field = cache_result
         if uncached_values:
             db_filter = {f"{field}__in": uncached_values}
             db_qs = super().filter(**db_filter)
+
             db_instances = list(db_qs)
             for instance in db_instances:
                 instance.update_cache()
@@ -417,7 +467,7 @@ class CachedManager(models.Manager):
         if cache_result is None:
             return None
 
-        if lookup == 'exact':
+        if lookup == "exact":
             cached_qs = cache_result
             if cached_qs is not None:
                 return cached_qs
@@ -439,72 +489,230 @@ def get_cached_foreign_key(instance, fk_field_name):
     Returns:
         The cached related object or None if not in cache or invalid.
     """
-    logger.debug("get_cached_foreign_key called: instance=%s, fk_field_name=%s", instance, fk_field_name)
-    # do nothing if exists already
-    # if getattr(instance, fk_field_name, None) is not None:
-    #     return None
+
+    logger.debug(
+        "get_cached_foreign_key called: instance=%s, fk_field_name=%s",
+        instance,
+        fk_field_name,
+    )
     # Get the model field
     try:
         field = instance._meta.get_field(fk_field_name)
     except FieldDoesNotExist:
-        logger.error("Field %s does not exist on model %s", fk_field_name, instance._meta.model_name)
+        logger.error(
+            "Field %s does not exist on model %s",
+            fk_field_name,
+            instance._meta.model_name,
+        )
         return None
-    
+
     # Verify it's a ForeignKey
     if not isinstance(field, ForeignKey):
-        logger.error("Field %s on model %s is not a ForeignKey", fk_field_name, instance._meta.model_name)
+        logger.error(
+            "Field %s on model %s is not a ForeignKey",
+            fk_field_name,
+            instance._meta.model_name,
+        )
         return None
-    
+
     # Get the ForeignKey value (e.g., i_user_id)
-    fk_value = getattr(instance, field.attname)  # attname is the column name (e.g., i_user_id)
+    fk_value = getattr(
+        instance, field.attname
+    )  # attname is the column name (e.g., i_user_id)
     if fk_value is None:
         logger.debug("ForeignKey value for %s is None", fk_field_name)
         return None
 
+    related_model = field.related_model
+    cached_data = cache.get(get_cache_key(related_model, fk_value))
+    if not isinstance(cached_data, dict):
+        logger.debug("No cached %s for %s", related_model.__name__, fk_value)
+        return None
+    related = related_model(**cached_data)
+    related._state.adding = False
+    related._state.db = "default"
+    # fill the relation cache so that instance.<fk_field_name> does not hit the DB
+    field.set_cached_value(instance, related)
+    return related
+
 
 def clean_fk(instance):
     """
-    Returns a dictionary representation of a Django model instance with ForeignKey fields as _id and excluding relational fields.
-    
+    Returns a dictionary representation of a Django model instance
+    with ForeignKey fields as _id and excluding relational fields.
+
     Args:
         instance: A Django model instance.
-    
+
     Returns:
         dict: A dictionary containing field values suitable for model instantiation.
     """
     field_values = {}
     for field in instance._meta.get_fields():
-        if not isinstance(field, (models.ForeignKey, models.ManyToOneRel, models.ManyToManyRel, models.ManyToManyField)):
+        if not isinstance(
+            field,
+            (
+                models.ForeignKey,
+                models.ManyToOneRel,
+                models.ManyToManyRel,
+                models.ManyToManyField,
+            ),
+        ):
             field_values[field.name] = getattr(instance, field.name)
         elif getattr(instance, f"{field.name}_id", None) is not None:
             field_values[f"{field.name}_id"] = getattr(instance, f"{field.name}_id")
     return field_values
 
 
+class GenerateUUIDv7(Func):
+    """
+    Cross-database UUIDv7 generator.
+
+    Usage:
+        from yourapp.db_functions import GenerateUUIDv7
+
+        class YourModel(models.Model):
+            id = models.UUIDField(
+                primary_key=True,
+                db_default=GenerateUUIDv7(),
+                editable=False,
+            )
+    """
+    output_field = UUIDField()
+    template = '%(function)s()'
+
+    def as_sql(self, compiler, connection, **extra_context):
+        vendor = connection.vendor
+
+        if vendor == 'postgresql':
+            # PostgreSQL 18+ has native uuidv7()
+            # Older versions use our custom uuid_generate_v7()
+            pg_version = getattr(connection, 'pg_version', 0)
+            if pg_version >= 180000:
+                function = 'uuidv7'
+            else:
+                function = 'uuid_generate_v7'
+
+        elif vendor == 'microsoft':
+            # SQL Server - uses our custom function
+            # Change to 'dbo.uuid_v8mssql' if you want the optimized version
+            # for better clustered index performance
+            function = 'dbo.uuid_v7'
+
+        else:
+            # Fallback for other databases (or raise error)
+            function = 'uuid_generate_v7'
+
+        extra_context['function'] = function
+        return super().as_sql(compiler, connection, **extra_context)
+
+
+class RandomUUID(Func):
+    """Cross-database random UUID for Django 4.2"""
+    function = None  # Will be overridden per backend
+    output_field = UUIDField()
+    arity = 0
+
+    def as_postgresql(self, compiler, connection, **extra_context):
+        # PostgreSQL 13+ has gen_random_uuid() built-in
+        return self.as_sql(compiler, connection, function='gen_random_uuid', **extra_context)
+
+    def as_microsoft(self, compiler, connection, **extra_context):  # MSSQL
+        return self.as_sql(compiler, connection, function='NEWID', **extra_context)
+
+    # Optional: fallback for other DBs (e.g. SQLite for dev)
+    def as_sql(self, compiler, connection, **extra_context):
+        if extra_context.get('function', self.function) is None:
+            # You can raise or use a default
+            raise NotImplementedError(f"RandomUUID not supported on {connection.vendor}")
+        return super().as_sql(compiler, connection, **extra_context)
+
+
 class CachedModelMixin:
     USE_CACHE = settings.CACHE_OBJECT_DEFAULT
+    UNIQUE_FIELDS = {"id", "uuid", "pk"}
+
+    @classmethod
+    def bulk_update_cache(cls, objs):
+        """
+        Efficiently update caches for a list of updated objects after bulk_update.
+        Call this manually after your manager's bulk_update if needed,
+        or integrate into the manager method.
+        """
+        if not cls.USE_CACHE or not objs:
+            return
+
+        now = settings.CACHE_OBJECT_TTL  # or None for no timeout
+
+        # Get unique fields once
+        unique_fields = getattr(cls, "UNIQUE_FIELDS")
+
+        # Primary caches: key(pk) -> full cleaned object
+        primary_data = {}
+        for obj in objs:
+            if obj.pk:
+                primary_data[get_cache_key(cls, obj.pk)] = clean_fk(obj)
+
+        if primary_data:
+            cache.set_many(primary_data, timeout=now)
+
+        # Secondary caches: key(field_value) -> pk  (only if value != pk)
+        secondary_data = {}
+        for obj in objs:
+            if not obj.pk:
+                continue
+            for f in unique_fields:
+                try:
+                    val = getattr(obj, f)
+                except AttributeError:
+                    continue  # skip if field doesn't exist (e.g. property)
+                if val != obj.pk:  # your original condition
+                    key = get_cache_key(cls, val)
+                    secondary_data[key] = obj.pk
+
+        if secondary_data:
+            cache.set_many(secondary_data, timeout=now)
+
+        logger.debug("Bulk cached %d instances of %s", len(objs), cls.__name__)
+
     def update_cache(self):
         """
         Updates the cache for this object after saving.
         """
         if self.USE_CACHE:
-            cache.set(get_cache_key(self.__class__, self.pk), clean_fk(self), timeout=settings.CACHE_OBJECT_TTL)
-
-            unique_fields = getattr(self.__class__.objects, 'UNIQUE_FIELDS', {'id', 'uuid', 'pk'})
+            cache.set(
+                get_cache_key(self.__class__, self.pk),
+                clean_fk(self),
+                timeout=settings.CACHE_OBJECT_TTL,
+            )
+            unique_fields = getattr(
+                self, "UNIQUE_FIELDS", {"id", "uuid", "pk"}
+            )
             for f in unique_fields:
-                # get_field raised an error on property raise 
+                # get_field raised an error on property raise
                 if self.pk != getattr(self, f, self.pk):
-                    cache.set(get_cache_key(self.__class__, getattr(self, f)), self.pk, timeout=settings.CACHE_OBJECT_TTL)
+                    cache.set(
+                        get_cache_key(self.__class__, getattr(self, f)),
+                        self.pk,
+                        timeout=settings.CACHE_OBJECT_TTL,
+                    )
             logger.debug("Saved and cached instance: %s", self)
-        
+
     def delete_cache(self):
         """
         Deletes the cache entry for this object.
         """
         if self.USE_CACHE:
-            cache_key = f"{self.__class__.__name__}:{self.pk}"
-            cache.delete(cache_key)
-            logger.debug(f"Removed instance from cache: {cache_key}")
+            cache_keys = [get_cache_key(self.__class__, self.pk)]
+            for f in getattr(self, "UNIQUE_FIELDS", {"id", "uuid", "pk"}):
+                value = getattr(self, f, self.pk)
+                if value is not None and value != self.pk:
+                    cache_keys.append(get_cache_key(self.__class__, value))
+            cache.delete_many(cache_keys)
+            logger.debug("Removed instance from cache: %s", cache_keys)
+
+    class Meta:
+        abstract = True
 
 
 class ExtendedConnection(graphene.Connection):
@@ -572,9 +780,11 @@ def get_first_or_default_language():
         return Language.objects.first()
 
 
-def insert_role_right_for_system(system_role, right_id):
-    RoleRight = apps.get_model("core", "RoleRight")
-    Role = apps.get_model("core", "Role")
+def insert_role_right_for_system(system_role, right_id, migration_apps=None):
+    # `migration_apps`: the historical apps a migration passes (openIMIS core signature)
+    registry = migration_apps or apps
+    RoleRight = registry.get_model("core", "RoleRight")
+    Role = registry.get_model("core", "Role")
     existing_role = Role.objects.filter(is_system=system_role, validity_to__isnull=True).first()
     if not existing_role:
         logger.warning("Migration requested a role_right for system role %s but couldn't find that role", system_role)
@@ -586,9 +796,11 @@ def insert_role_right_for_system(system_role, right_id):
         return role_right
 
 
-def remove_role_right_for_system(system_role, right_id):
-    RoleRight = apps.get_model("core", "RoleRight")
-    Role = apps.get_model("core", "Role")
+def remove_role_right_for_system(system_role, right_id, migration_apps=None):
+    # `migration_apps`: the historical apps a migration passes (openIMIS core signature)
+    registry = migration_apps or apps
+    RoleRight = registry.get_model("core", "RoleRight")
+    Role = registry.get_model("core", "Role")
     existing_role = Role.objects.filter(is_system=system_role, validity_to__isnull=True).first()
     if not existing_role:
         logger.warning("Migration requested to remove a role_right for system role %s but couldn't find that role",
@@ -700,11 +912,6 @@ class ConfigUtilMixin:
             logger.error(f'Failed to configure function "%s" as "%s.%s": %s',
                          path, cls.__name__, function_name, str(e))
 
-def clear_cache(instance):
-    cache.delete(get_cache_key(instance.__class__, instance.pk))
-
-def get_cache_key(model, id):
-    return f"cs_{model.__name__}_{id}"
 
 @lru_cache(maxsize=1)
 def collect_all_gql_permissions():
@@ -752,3 +959,24 @@ def collect_all_gql_permissions():
             continue
 
     return permissions_dict
+
+
+@lru_cache(maxsize=1)
+def to_list_permissions():
+    """Convert collected permissions to a set of all permission IDs."""
+    permissions_dict = collect_all_gql_permissions()
+    all_perms = set()
+    for app_perms in permissions_dict.values():
+        for perm_ids in app_perms.values():
+            for perm_id in perm_ids:
+                all_perms.add(int(perm_id))
+    return sorted(list(all_perms))
+
+
+def to_json_safe_value(value):
+    """`value` if JSON can serialise it, else its string (ported from openIMIS core)."""
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        return str(value)

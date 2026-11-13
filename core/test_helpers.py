@@ -1,22 +1,14 @@
-from core.models import (
-    Officer,
-    InteractiveUser,
-    User,
-    TechnicalUser,
-    Language,
-    Role,
-    RoleRight,
-    filter_validity
-)
+from core.models import Officer, InteractiveUser, User, TechnicalUser, filter_validity
+from core.models import Role, RoleRight, UserBusinessAccess, Language
+from core.utils import collect_all_gql_permissions, set_current_user  # noqa: F401 (dev-csu)
 from django.core.cache import cache
+import datetime
 from core.models.openimis_graphql_test_case import openIMISGraphQLTestCase
 from core.services.userServices import create_or_update_officer_villages
 from core.services import create_or_update_user_roles
 from location.models import Location
 from  uuid import uuid4
 import json
-import datetime
-from core.utils import collect_all_gql_permissions, set_current_user
 
 def create_test_officer(valid=True, custom_props={}, villages = []):
 
@@ -53,28 +45,204 @@ def create_test_officer(valid=True, custom_props={}, villages = []):
         result = create_or_update_officer_villages(eo, [v.id for v in villages], 1)
         return eo
 
-def create_test_interactive_user(username='TestInteractiveTest', password="S\\:\\/pe®Pąßw0rd""", roles=None,
-                                 custom_props=None):
-    if custom_props is None:
-        custom_props = {}
-    else:
-        custom_props = {k: v for k, v in custom_props.items() if hasattr(InteractiveUser, k)}
+def create_test_role(name="TestRole", rights=None, uba_rights=None, custom_props=None, *,
+                     perm_names=None, is_system=0, is_blocked=False):
+    """
+    Create a role with its two right bags: `rights` are global (RoleRight.uba = False),
+    `uba_rights` are only granted on the business objects the user is linked to
+    through a UserBusinessAccess row (RoleRight.uba = True).
+
+    dev-csu call style: `perm_names` are permission names from the modules' DEFAULT
+    configs (e.g. "gql_query_claims_perms"); the role is then found or created by name.
+    """
+    if perm_names is not None:
+        return get_or_create_test_role(perm_names, name=name, is_system=is_system,
+                                       custom_props=custom_props)
+    role = Role.objects.create(
+        **{
+            "name": name,
+            "is_system": is_system,
+            "is_blocked": is_blocked,
+            "audit_user_id": -1,
+            **(custom_props if custom_props else {})
+        }
+    )
+    for uba, bag in ((False, rights), (True, uba_rights)):
+        for right_id in (bag or []):
+            RoleRight.objects.create(
+                role=role,
+                right_id=right_id,
+                uba=uba,
+                audit_user_id=-1,
+            )
+    return role
+
+
+def get_or_create_test_admin_role(name="TestIMISAdmin"):
+    """
+    An IMIS Administrator role (`is_system=64`) created by the test itself: the user
+    holding it is a superuser, so the tests do not depend on the system roles of a
+    seeded database.
+    """
+    role = Role.objects.filter(name=name, is_system=64, validity_to__isnull=True).first()
+    return role if role else create_test_role(name=name, custom_props={"is_system": 64})
+
+
+def create_imis_admin_role():
+    """Same name as the 26.10 helper; the administrator role is found or created."""
+    return get_or_create_test_admin_role()
+
+
+def resolve_perm_right_ids(perm_names):
+    """The integer right ids behind permission names as declared in the modules' DEFAULT_CFG."""
+    from core.utils import collect_all_gql_permissions
+
+    flat_perms = {}
+    for app_perms in collect_all_gql_permissions().values():
+        flat_perms.update(app_perms)
+    right_ids = set()
+    for perm_name in perm_names:
+        if perm_name not in flat_perms:
+            raise Exception(f"Permission {perm_name} not found")
+        right_ids.update(int(pid) for pid in flat_perms[perm_name])
+    return sorted(right_ids)
+
+
+def _sync_role_rights(role, right_ids):
+    """Make the role's global rights (uba=False) exactly `right_ids`; its UBA rights are left alone."""
+    from django.core.cache import cache
+
+    current = RoleRight.objects.filter(role=role, uba=False, validity_to__isnull=True)
+    if set(current.values_list("right_id", flat=True)) == set(right_ids):
+        return
+    current.delete()
+    for right_id in right_ids:
+        RoleRight.objects.create(role=role, right_id=right_id, uba=False, audit_user_id=-1)
+    # the rights of a user are cached
+    cache.clear()
+
+
+def get_or_create_test_role(perm_names=(), name="TestRole", is_system=0, custom_props=None):
+    """
+    The role named `name`, created when missing, holding exactly the rights behind
+    `perm_names` (permission names as declared in the modules' DEFAULT_CFG).
+
+    Ported from 26.10 (`create_test_role` there): tests ask for a role by what it
+    may do rather than by the id it has in a seeded demo database, so they run on
+    an empty test database too.
+    """
+    role = Role.objects.filter(name=name, validity_to__isnull=True).first()
+    if role is None:
+        role = Role.objects.create(**{
+            "name": name,
+            "is_system": is_system,
+            "is_blocked": False,
+            "audit_user_id": -1,
+            **(custom_props if custom_props else {}),
+        })
+    _sync_role_rights(role, resolve_perm_right_ids(perm_names))
+    return role
+
+
+def create_enrolment_officer_role():
+    """The Enrolment Officer role of the demo fixture (role id 1 there), as in 26.10."""
+    return get_or_create_test_role([
+        "gql_query_report_perms",
+        "gql_query_insuree_perms",
+        "gql_query_insurees_perms",
+        "gql_mutation_update_insurees_perms",
+        "gql_mutation_create_insurees_perms",
+        "gql_mutation_delete_insurees_perms",
+        "gql_query_locations_perms",
+        "gql_query_products_perms",
+        "gql_query_policies_perms",
+        "gql_mutation_create_policies_perms",
+        "gql_mutation_edit_policies_perms",
+        "gql_mutation_renew_policies_perms",
+        "gql_mutation_suspend_policies_perms",
+        "gql_mutation_delete_policies_perms",
+        "gql_query_premiums_perms",
+        "gql_mutation_create_premiums_perms",
+        "gql_mutation_update_premiums_perms",
+        "gql_mutation_delete_premiums_perms",
+        "gql_query_payers_perms",
+    ], name="EnrolmentOfficer", is_system=1)
+
+
+def create_claim_admin_role():
+    """The Claim Administrator role of the demo fixture (role id 9 there), as in 26.10."""
+    return get_or_create_test_role([
+        "gql_query_locations_perms",
+        "gql_query_policies_perms",
+        "gql_query_insuree_perms",
+        "gql_query_insurees_perms",
+        "gql_mutation_create_claims_perms",
+        "gql_mutation_update_claims_perms",
+        "gql_query_claims_perms",
+        "gql_mutation_load_claims_perms",
+        "gql_mutation_restore_claims_perms",
+        "gql_mutation_delete_claims_perms",
+        "gql_query_health_facilities_perms",
+        "gql_query_medical_services_perms",
+        "gql_query_medical_items_perms",
+    ], name="ClaimAdministrator", is_system=256)
+
+
+def create_medical_officer_role():
+    """The Medical Officer role of the demo fixture (role id 5 there), as in 26.10."""
+    return get_or_create_test_role([
+        "gql_query_report_perms",
+        "gql_query_policies_perms",
+        "gql_query_eligibilities_perms",
+        "gql_query_claims_perms",
+        "gql_mutation_create_claims_perms",
+        "gql_mutation_update_claims_perms",
+        "gql_mutation_submit_claims_perms",
+        "gql_mutation_select_claim_feedback_perms",
+        "gql_mutation_bypass_claim_feedback_perms",
+        "gql_mutation_skip_claim_feedback_perms",
+        "gql_mutation_deliver_claim_feedback_perms",
+        "gql_mutation_select_claim_review_perms",
+        "gql_mutation_bypass_claim_review_perms",
+        "gql_mutation_skip_claim_review_perms",
+        "gql_mutation_deliver_claim_review_perms",
+        "gql_mutation_process_claims_perms",
+        "gql_reports_claim_history_report_perms",
+    ], name="MedicalOfficer", is_system=16)
+
+
+def create_test_user_business_access(user, business_object, link_type, audit_user=None, custom_props=None):
+    """
+    Link a user to a business object under a credential, `link_type` being a code
+    registered through `core.uba_link_types` (not an openIMIS role).
+    """
+    from django.contrib.contenttypes.models import ContentType
+
+    business_access = UserBusinessAccess(
+        **{
+            "user": user,
+            "link_type": link_type,
+            "content_type": ContentType.objects.get_for_model(business_object),
+            "object_id": str(business_object.pk),
+            **(custom_props if custom_props else {})
+        }
+    )
+    business_access.save(user=audit_user)
+    return business_access
+
+
+def create_test_interactive_user(username='TestInteractiveTest', password="Test1234", roles=None, custom_props=None):
     if roles is None:
-        roles = [7, 1, 2, 3, 4, 5, 6]
+        roles = [get_or_create_test_admin_role().id]
+    custom_props = {k: v for k, v in (custom_props or {}).items() if hasattr(InteractiveUser, k)}
+    # find-or-create (dev-csu): a kept test DB may already hold that user
     user = None
     i_user = InteractiveUser.objects.filter(login_name=username).first()
-    
     if i_user:
-        # TODO add custom prop to existing user
         user = User.objects.filter(i_user=i_user).first()
     else:
-        user = User.objects.filter(
-            username=username,
-        ).first()
-        user = User.objects.filter(
-            username=username,
-        ).select_related('i_user').first()
-        if user and hasattr(user, 'i_user') and user.i_user is not None:
+        user = User.objects.filter(username=username).select_related('i_user').first()
+        if user and getattr(user, 'i_user', None) is not None:
             i_user = user.i_user
         else:
             i_user = InteractiveUser.objects.create(
@@ -88,12 +256,12 @@ def create_test_interactive_user(username='TestInteractiveTest', password="S\\:\
                     **custom_props
                 }
             )
-   
     if not user:
-        user = User.objects.create(
-            username=username,
-            i_user=i_user,
-        )
+        user = User.objects.create(username=username, i_user=i_user)
+    elif user.i_user_id != i_user.id:
+        # a User kept without its interactive user: link the one found or created
+        user.i_user = i_user
+        user.save()
     i_user.set_password(password)
     i_user.save()
     create_or_update_user_roles(i_user, roles, None)
@@ -157,88 +325,175 @@ def compare_dicts(dict1, dict2):
     return recursive_compare(dict1, dict2)
 
 
+
 def AssertMutation(test_obj,mutation_uuid, token ):
     return openIMISGraphQLTestCase().get_mutation_result(mutation_uuid, token)
 
-def create_test_role(perm_names=[], name=None, is_system=0, is_blocked=False, custom_props=None):
-    """
-    Create a test role with permissions specified by name as they appear in the module DEFAULT config.
 
-    Args:
-        perm_names: List of permission names (e.g., ["gql_query_roles_perms", "gql_mutation_create_roles_perms"])
-        name: Optional role name, defaults to "TestRole"
-        is_system: System role flag (default 0 for non-system)
-        is_blocked: Whether role is blocked (default False)
-        custom_props: Additional properties for the role
+# ---------------------------------------------------------------------------------------
+# Security parity helpers (ported/adapted from the openimis-dev-tools reference:
+# core.test_helpers.create_right_only_user and location.test_helpers.create_basic_test_locations)
+# ---------------------------------------------------------------------------------------
 
-    Returns:
-        Role object
-    """
-    if custom_props is None:
-        custom_props = {}
-    else:
-        custom_props = {k: v for k, v in custom_props.items() if hasattr(Role, k)}
+class SecurityTree:
+    """Two disjoint branches R1>D1>W1>V1 and R2>D2>W2>V2 with a health facility in each
+    district. A 'restricted' user is granted D1 only; every object built on branch 2 must
+    be invisible / untouchable for that user."""
+    pass
 
-    if name is None:
-        name = "TestRole"
 
-    # Check if role already exists by name
-    existing_role = Role.objects.filter(name=name, *Role.filter_validity()).first()
-    if existing_role:
-        return existing_role
+def create_security_tree(prefix="SP"):
+    """Build the two-branch location tree. `prefix` (max 4 chars) keeps codes unique."""
+    from location.models import HealthFacility, HealthFacilityLegalForm
+    tree = SecurityTree()
+    for n in ("1", "2"):
+        r = Location.objects.create(code=f"{prefix}R{n}", name=f"{prefix} Region {n}", type="R",
+                                    audit_user_id=-1, validity_from="2019-01-01")
+        d = Location.objects.create(code=f"{prefix}D{n}", name=f"{prefix} District {n}", type="D",
+                                    parent=r, audit_user_id=-1, validity_from="2019-01-01")
+        w = Location.objects.create(code=f"{prefix}W{n}", name=f"{prefix} Ward {n}", type="W",
+                                    parent=d, audit_user_id=-1, validity_from="2019-01-01")
+        v = Location.objects.create(code=f"{prefix}V{n}", name=f"{prefix} Village {n}", type="V",
+                                    parent=w, audit_user_id=-1, validity_from="2019-01-01")
+        hf = HealthFacility.objects.create(
+            code=f"{prefix}HF{n}", name=f"{prefix} HF {n}", level="H", care_type="B",
+            legal_form=HealthFacilityLegalForm.objects.filter(code="C").first()
+            or HealthFacilityLegalForm.objects.first(),
+            location=d, validity_from="2019-01-01", audit_user_id=-1, offline=False)
+        for k, val in (("r", r), ("d", d), ("w", w), ("v", v), ("hf", hf)):
+            setattr(tree, f"{k}{n}", val)
+    return tree
 
-    # Collect all permissions from DEFAULT configs
-    permissions_dict = collect_all_gql_permissions()
 
-    # Flatten permission IDs for the given names
-    flat_perms = {}
-    for app_perms in permissions_dict.values():
-        for perm_name, perm_ids in app_perms.items():
-            flat_perms[perm_name] = perm_ids
-
-    right_ids = []
-    for perm_name in perm_names:
-        if perm_name not in flat_perms:
-            raise Exception(f"Permission {perm_name} not found")
-        right_ids.extend(flat_perms[perm_name])
-
-    # Remove duplicates
-    right_ids = list(set(right_ids))
-    # Create the role
-    role_data = {
-        "name": name,
-        "is_system": is_system,
-        "is_blocked": is_blocked,
-        "audit_user_id": -1,
-        "validity_from": datetime.datetime.now(),
-        **custom_props,
-    }
-
-    role = Role.objects.create(**role_data)
+def create_right_only_user(username, rights, district_ids=(), uba_rights=None, custom_props=None):
+    """A NON-superuser holding exactly `rights` (right ids) in the global bag and assigned
+    to `district_ids`. Mirrors the reference `create_right_only_user`."""
+    from core.services.userServices import create_or_update_user_districts
+    from django.core.cache import cache
+    role = create_test_role(name=f"SP role {username}", rights=list(rights or []),
+                            uba_rights=uba_rights)
+    user = create_test_interactive_user(username=username, roles=[role.id],
+                                        custom_props=custom_props)
+    if district_ids:
+        create_or_update_user_districts(user.i_user, list(district_ids), -1)
     cache.clear()
-    RoleRight.objects.filter(role=role).delete()
-    # Create role rights
-    for right_id in right_ids:
-        RoleRight.objects.create(
-            role=role,
-            right_id=right_id,
-            audit_user_id=-1,
-            validity_from=datetime.datetime.now(),
-        )
+    return user
 
-    return role
 
-def create_medical_officer_role():
+def get_test_token(user):
+    """JWT for HTTP GraphQL / REST calls (Authorization: Bearer <token>)."""
+    from dataclasses import dataclass
+    from graphql_jwt.shortcuts import get_token
+
+    @dataclass
+    class _Ctx:
+        user: object
+
+    return get_token(user, _Ctx(user=user))
+
+
+def perm_ids(perms):
+    """Config right lists are strings or ints; normalise to ints."""
+    return [int(p) for p in (perms or [])]
+
+
+
+
+# ---------------------------------------------------------------------------------------
+# OP-2029 contract helpers (ported from the openIMIS reference, feature/OP-3317)
+# ---------------------------------------------------------------------------------------
+
+def mark_deleted(obj):
+    """Mark ``obj`` deleted the way its model family does, without side effects.
+
+    Written straight to the row, so no audit copy or history entry is made:
+    a test of the validity filter wants exactly one deleted row.
     """
-    Create the Medical Officer role with specific permissions.
-    This role should have permissions for claims and claim history reports.
+    import datetime
+    model = type(obj)
+    fields = {f.name for f in model._meta.fields}
+    changes = {}
+    if "is_deleted" in fields:
+        changes["is_deleted"] = True
+    if "active" in fields:
+        changes["active"] = False
+    if "validity_to" in fields:
+        changes["validity_to"] = datetime.datetime.now()
+    model.objects.filter(pk=obj.pk).update(**changes)
+    # update() bypasses save(), so a cached copy would still read as live
+    if hasattr(obj, "delete_cache"):
+        obj.delete_cache()
+    return obj
+
+
+def assert_row_filters(test, model, queryset, user, live, deleted, default_hides_deleted):
+    """The OP-2029 validity contract of ``model.get_queryset``, on two rows.
+
+    ``live`` and ``deleted`` are primary keys inside ``queryset``.
+    ``default_hides_deleted`` states what a caller asking for nothing gets
+    today, which phase 1 of OP-3317 must not change.
     """
-    medical_officer_perms = [
+    from core.models.row_filters import Validity
+
+    def pks(**kwargs):
+        rows = model.get_queryset(queryset, user, **kwargs)
+        return set(rows.values_list("pk", flat=True)) & {live, deleted}
+
+    test.assertEqual({live} if default_hides_deleted else {live, deleted}, pks())
+    test.assertEqual({live}, pks(validity=Validity.NOW))
+    test.assertEqual({live}, pks(validity=Validity.LIVE))
+    test.assertEqual({deleted}, pks(validity=Validity.DELETED_NOW))
+    test.assertEqual({live, deleted}, pks(validity=Validity.ALL))
+
+
+class LogInHelper:
+    """Ported from openIMIS core (used by the modules' develop tests)."""
+    def __init__(self):
+        self.test_user_name = "Admin"
+        self.test_user_password = "TestPasswordTest2@"
+        self.test_data_user = {
+            "username": self.test_user_name,
+            "last_name": self.test_user_name,
+            "password": self.test_user_password,
+            "other_names": self.test_user_name,
+            "user_types": "INTERACTIVE",
+            "language": "en"
+        }
+
+    def get_or_create_user_api(self, **kwargs):
+        return create_test_interactive_user(**kwargs)
+
+
+def create_clerk_role():
+    """The Clerk role: the rights of an enrolment officer (ported from openIMIS core)."""
+    clerk_perms = [
+        "gql_query_locations_perms",
+        "gql_query_families_perms",
+        "gql_mutation_create_families_perms",
+        "gql_mutation_update_families_perms",
+        "gql_mutation_delete_families_perms",
+        "gql_query_insurees_perms",
+        "gql_mutation_create_insurees_perms",
+        "gql_mutation_update_insurees_perms",
+        "gql_mutation_delete_insurees_perms",
+        "gql_query_insuree_inquire_perms",
+        "gql_query_policies_perms",
+        "gql_mutation_create_policies_perms",
+        "gql_mutation_edit_policies_perms",
+        "gql_mutation_delete_policies_perms",
+        "gql_mutation_renew_policies_perms",
+        "gql_query_premiums_perms",
+        "gql_mutation_create_premiums_perms",
+        "gql_mutation_update_premiums_perms",
+        "gql_mutation_delete_premiums_perms",
         "gql_query_claims_perms",
-        "gql_mutation_create_claims_perms",
-        "gql_mutation_update_claims_perms",
-        "gql_mutation_submit_claims_perms",
-        "gql_mutation_process_claims_perms",
-        "gql_reports_claim_history_report_perms",
+        "gql_mutation_deliver_claim_feedback_perms",
     ]
-    return create_test_role(perm_names=medical_officer_perms, name="MedicalOfficer", is_system=16)
+    # Cameroon does not declare every right of openIMIS core (insuree_inquire...): only
+    # the ones the installed modules declare are given
+    from core.utils import collect_all_gql_permissions
+    declared = set()
+    for app_perms in collect_all_gql_permissions().values():
+        declared.update(app_perms)
+    return get_or_create_test_role(
+        perm_names=[perm for perm in clerk_perms if perm in declared], name="Clerk", is_system=8)

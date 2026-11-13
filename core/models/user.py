@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import uuid
 from datetime import timedelta, datetime as py_datetime
@@ -8,19 +9,22 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin, Group
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
-from django.db import models
+from django.db import models, transaction
 from django.utils.crypto import salted_hmac
 from graphql import ResolveInfo
 import core
 #from core.datetimes.ad_datetime import datetime as py_datetime
 from django.conf import settings
 
-from ..utils import filter_validity, CachedManager
+from ..utils import filter_validity, to_list_permissions, CachedManager
 from .base import *
 from .versioned_model import *
 
 logger = logging.getLogger(__name__)
 from rest_framework import exceptions
+
+# System number of the IMIS Administrator role. A user holding it passes every has_perms check.
+IMIS_ADMINISTRATOR_ROLE = 64
 
 
 class UserManager(BaseUserManager, CachedManager):
@@ -43,10 +47,68 @@ class UserManager(BaseUserManager, CachedManager):
         self._create_tech_user(username, email, password, **extra_fields)
 
     def create_superuser(self, username, password=None, email=None, **extra_fields):
-        extra_fields['is_staff'] = True
-        extra_fields['is_superuser'] = True
-        user = self._create_tech_user(username, email, password, **extra_fields)
-            
+        # core.User has no password column, so Django's createsuperuser never puts the
+        # password in this call. The core command stashes it in the environment instead.
+        if not password:
+            password = os.environ.get("DJANGO_SUPERUSER_PASSWORD") or None
+        # A superuser is an interactive user holding the IMIS Administrator role, no
+        # technical user is involved: core_User has no is_superuser column to flag it on.
+        with transaction.atomic():
+            i_user = self._create_interactive_superuser(username, password, email)
+            user = self.filter(username=username).first() or User(username=username)
+            user.i_user = i_user
+            user.save()
+        return user
+
+    def _create_interactive_superuser(self, username, password, email=None):
+        """
+        The interactive user (tblUsers) the openIMIS UI logs in as, with the IMIS
+        Administrator role (is_system = 64) that makes it a superuser. The language and
+        the role are created here when the database does not already have them.
+        """
+        language = (
+            Language.objects.filter(code="en").first()
+            or Language.objects.order_by("sort_order", "code").first()
+        )
+        if language is None:
+            language = Language.objects.create(code="en", name="English", sort_order=1)
+
+        role = Role.objects.filter(
+            *filter_validity(), is_system=IMIS_ADMINISTRATOR_ROLE
+        ).first()
+        if role is None:
+            role = Role.objects.create(
+                name="IMIS Administrator",
+                is_system=IMIS_ADMINISTRATOR_ROLE,
+                is_blocked=False,
+                audit_user_id=-1,
+            )
+
+        i_user = InteractiveUser.objects.filter(
+            *filter_validity(), login_name=username
+        ).first()
+        if i_user is None:
+            i_user = InteractiveUser(
+                language=language,
+                last_name=username[:100],
+                other_names=username[:100],
+                login_name=username,
+                audit_user_id=-1,
+                role_id=role.id,
+                email=email,
+            )
+        elif not i_user.role_id:
+            i_user.role_id = role.id
+        if password:
+            i_user.set_password(password)
+        i_user.save()
+
+        if not UserRole.objects.filter(
+            *filter_validity(), user=i_user, role=role
+        ).exists():
+            UserRole.objects.create(user=i_user, role=role, audit_user_id=-1)
+        cache.delete('is_admin_' + str(i_user.id))
+        return i_user
 
     def auto_provision_user(self, **kwargs):
         # only auto-provision django user if registered as interactive user
@@ -60,6 +122,8 @@ class UserManager(BaseUserManager, CachedManager):
             raise exceptions.AuthenticationFailed("INCORRECT_CREDENTIALS")
         kwargs['i_user'] = i_user
         user = self._create_core_user(**kwargs)
+        user.i_user = i_user
+        user.save()
         if core.auto_provisioning_user_group:
             group = Group.objects.filter(
                 name=core.auto_provisioning_user_group).first()
@@ -135,14 +199,12 @@ class Role(VersionedModel):
         db_column='AuditUserID', blank=True, null=True)
 
     @classmethod
-    def get_queryset(cls, queryset, user):
+    def get_queryset(cls, queryset, user, **rows):
         if isinstance(user, ResolveInfo):
             user = user.context.user
         if settings.ROW_SECURITY and user.is_anonymous:
-            return queryset.filter(id=-1)
-        if settings.ROW_SECURITY:
-            pass
-        return queryset
+            return cls.no_rows(queryset)
+        return super().get_queryset(queryset, user, **rows)
 
     class Meta:
         managed = True
@@ -154,22 +216,32 @@ class RoleRight(VersionedModel):
     role = models.ForeignKey(Role, models.DO_NOTHING,
                              db_column='RoleID', related_name="rights")
     right_id = models.IntegerField(db_column='RightID')
+    uba = models.BooleanField(
+        db_column='UBA', default=False,
+        help_text="False: the right is in the global bag, it is granted everywhere. "
+                  "True: the right is granted only on the instances the user has a "
+                  "UserBusinessAccess link on, it never appears in the global bag.")
     audit_user_id = models.IntegerField(
         db_column='AuditUserId', blank=True, null=True)
 
     @classmethod
-    def get_queryset(cls, queryset, user):
+    def get_queryset(cls, queryset, user, **rows):
         if isinstance(user, ResolveInfo):
             user = user.context.user
         if settings.ROW_SECURITY and user.is_anonymous:
-            return queryset.filter(id=-1)
-        if settings.ROW_SECURITY:
-            pass
-        return queryset
+            return cls.no_rows(queryset)
+        return super().get_queryset(queryset, user, **rows)
 
     class Meta:
         managed = True
         db_table = 'tblRoleRight'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['role', 'right_id', 'uba'],
+                condition=models.Q(validity_to__isnull=True),
+                name='rolerigh_unique_valid_role_right_uba',
+            )
+        ]
 
 
 class InteractiveUser(VersionedModel):
@@ -243,20 +315,57 @@ class InteractiveUser(VersionedModel):
 
     @property
     def is_staff(self):
-        return False
+        return self.is_superuser
 
     @property
     def is_superuser(self):
-        if self.user and self.user.t_user:
-            return self.user.t_user.is_superuser
-        return False
+        # the IMIS Administrator role makes the superuser, a technical superuser
+        # bound to that interactive user (legacy createsuperuser) still counts
+        user = self.user
+        if user and user.t_user and user.t_user.is_superuser:
+            return True
+        return self.is_imis_admin
+
+    @property
+    def role_ids(self):
+        return [r.role_id for r in UserRole.filter_queryset().filter(user_id=self.id)]
+
+    def rights_for(self, uba=False):
+        """
+        Right ids carried by the roles of that user.
+        `uba=False` (default) is the global bag, `uba=True` the UBA-only bag,
+        `uba=None` both, i.e. the rights that can be granted through a
+        UserBusinessAccess link on a given business object.
+        """
+        queryset = RoleRight.filter_queryset().filter(role_id__in=self.role_ids)
+        if uba is not None:
+            queryset = queryset.filter(uba=uba)
+        return list(queryset.values_list('right_id', flat=True).distinct())
 
     @property
     def rights(self):
-        rights = [rr.right_id for rr in RoleRight.filter_queryset().filter(
-            role_id__in=[r.role_id for r in UserRole.filter_queryset().filter(
-                user_id=self.id)]).distinct()]
-        return rights
+        """
+        The global bag: UBA-only rights are deliberately not part of it.
+        A superuser holds every right declared in the module configs.
+        """
+        if self.is_superuser:
+            return sorted(set(to_list_permissions()) | set(self.rights_for(uba=False)))
+        return self.rights_for(uba=False)
+
+    @property
+    def uba_rights(self):
+        """
+        The UBA-only bag: rights the user never holds globally, granted solely on the
+        business objects reached through a UserBusinessAccess link. Disjoint from
+        `rights` by construction, the two are filtered on opposite values of
+        `RoleRight.uba`.
+        """
+        return self.rights_for(uba=True)
+
+    @property
+    def rights_for_uba(self):
+        """Rights that count on a business object the user has a UBA link on (uba True or False)."""
+        return self.rights_for(uba=None)
 
     @property
     def rights_str(self):
@@ -311,7 +420,7 @@ class InteractiveUser(VersionedModel):
             is_claim_admin = cache.get(cache_name)
             if is_claim_admin is None:
                 
-                from core.models.user import ClaimAdmin
+                from claim.models import ClaimAdmin
                 is_claim_admin = ClaimAdmin.objects.filter(
                     code=self.login_name,
                     has_login=True,
@@ -371,12 +480,12 @@ class InteractiveUser(VersionedModel):
         return "email"
 
     @classmethod
-    def get_queryset(cls, queryset, user):
+    def get_queryset(cls, queryset, user, **rows):
         if isinstance(user, ResolveInfo):
             user = user.context.user.i_user
         if settings.ROW_SECURITY and user.is_anonymous:
-            return queryset.filter(id=-1)
-        return queryset
+            return cls.no_rows(queryset)
+        return super().get_queryset(queryset, user, **rows)
 
     class Meta:
         managed = True
@@ -435,11 +544,59 @@ class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
     def language(self):
         return self._u.langage if self._u else None
 
-    def has_perms(self, perm_list, obj=None):
+    def has_perms(self, perm_list, obj=None, access_requirements=None):
+        """
+        Single permission entry point.
+
+        Without `access_requirements` only the global bag counts: rights assigned to
+        the user's roles with `RoleRight.uba = False`.
+
+        With `access_requirements` (the business map, e.g.
+        `['location.healthfacility', hf_uuid]` or, demanding a credential,
+        `['location.healthfacility', hf_uuid, 'HF_CLAIM_ADMIN']`), a right the global
+        bag does not cover is still granted when the user has a valid
+        UserBusinessAccess link on that instance, under one of the link types the map
+        demands, and the right sits in their UBA bag.
+        """
         if self.is_imis_admin:
             return True
-        else:
-            return super().has_perms(perm_list, obj)
+        if isinstance(perm_list, str):
+            perm_list = [perm_list]
+        if super().has_perms(perm_list, obj):
+            return True
+        from .user_business_access import normalize_access_requirements
+
+        business_maps = normalize_access_requirements(access_requirements)
+        if not business_maps:
+            return False
+        for perm in perm_list:
+            if self.has_perm(perm, obj):
+                continue
+            if not self._has_business_access_perm(perm, business_maps):
+                return False
+        return True
+
+    def _has_business_access_perm(self, perm, business_maps):
+        """
+        Is `perm` granted to that user on one of the business objects of `business_maps` ?
+
+        The link and the right are two independent questions: the UserBusinessAccess row
+        says which credential the user holds on the instance, the UBA bag says which
+        rights that user can exercise on an instance at all. openIMIS roles are only
+        bundles of rights, they never identify the link.
+        """
+        from .user_business_access import UserBusinessAccess
+
+        try:
+            right_id = int(perm)
+        except (TypeError, ValueError):
+            # UBA only scopes openIMIS numeric rights, django perms stay global
+            return False
+        i_user = InteractiveUser.is_interactive_user(self)
+        # reached only once the global bag has failed, so the UBA-only bag is the one left
+        if i_user is None or right_id not in i_user.uba_rights:
+            return False
+        return UserBusinessAccess.has_access(self, business_maps)
 
     @property
     def id_for_audit(self):
@@ -467,9 +624,9 @@ class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
 
     @property
     def is_superuser(self):
-        if self.user and self.user.t_user:
-            return self.user.t_user.is_superuser
-        return False
+        if self.t_user and self.t_user.is_superuser:
+            return True
+        return bool(self.i_user and self.i_user.is_superuser)
 
     @property
     def is_imis_admin(self):
@@ -584,14 +741,12 @@ class User(UUIDModel, PermissionsMixin, UUIDVersionedModel):
         super().save(*args, **kwargs)
 
     @classmethod
-    def get_queryset(cls, queryset, user):
+    def get_queryset(cls, queryset, user, **rows):
         if isinstance(user, ResolveInfo):
             user = user.context.user
         if settings.ROW_SECURITY and user.is_anonymous:
-            return queryset.filter(id=-1)
-        if settings.ROW_SECURITY:
-            pass
-        return queryset
+            return cls.no_rows(queryset)
+        return super().get_queryset(queryset, user, **rows)
 
     class Meta:
         managed = True
@@ -693,12 +848,17 @@ class Officer(VersionedModel, ExtendableModel):
         return Location.objects.filter(uuid__in=all_allowed_uuids)
 
     @classmethod
-    def get_queryset(cls, queryset, user):
+    def get_queryset(cls, queryset, user, **rows):
         if isinstance(user, ResolveInfo):
             user = user.context.user
         if settings.ROW_SECURITY and user.is_anonymous:
-            return queryset.filter(id=-1)
-        return queryset
+            return cls.no_rows(queryset)
+        if rows.get("validity") is None and rows.get("audits") is None:
+            # live officers unless validity / audits are asked for: OfficerGQLType
+            # used to filter them for every officer connection (claimOfficers,
+            # insureeOfficers, policyOfficers, enrolmentOfficers...)
+            queryset = cls.filter_queryset(queryset)
+        return super().get_queryset(queryset, user, **rows)
 
     class Meta:
         managed = True
